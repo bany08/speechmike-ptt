@@ -34,4 +34,4 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0911", ATTRS{idProduct}=="0c1c", TAG+="ua
 
 ## License
 
-MIT (license file to follow).
+MIT, see [LICENSE](LICENSE).

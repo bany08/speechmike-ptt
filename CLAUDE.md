@@ -31,7 +31,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 5. Hotplug reconnect
 6. Optional notifications (`notify-send`, can be disabled)
 7. systemd user service, udev rule file, `install.sh` with uninstall
-8. Final README, LICENSE, test on a clean system
+8. Final README, test on a clean system
 
 Out of scope for now: LED control (output report format unknown; goes into the README roadmap),
 testing on plain PulseAudio.

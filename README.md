@@ -4,8 +4,7 @@ Push-to-talk for the Philips SpeechMike on Linux: the microphone stays muted and
 while the REC button is held. Useful for voice control of AI assistants, without a microphone
 that listens all the time. Philips ships no Linux software for these devices.
 
-**Status: early development.** Hold mode, toggle mode and automatic reconnect work when started by
-hand. There is no system service yet.
+**Status: early development.** Tested on one device and one system so far.
 
 ## Supported devices
 
@@ -13,17 +12,38 @@ hand. There is no system service yet.
 | --- | --- | --- |
 | Philips SpeechMike III (LFH3200) | `0911:0c1c` | tested: detection, all dictation and function buttons |
 
-## Usage
+## Installation
 
-Requires Python 3.9+ and `pactl`. No other dependencies.
+Requires Python 3.9+, `pactl` and a systemd user session. No other dependencies.
 
 ```sh
-python3 -m speechmike_ptt
+git clone https://github.com/bany08/speechmike-ptt.git
+cd speechmike-ptt
+./install.sh
 ```
+
+This installs the program for your user, starts it as a systemd user service and adds a udev rule,
+which is the only step that needs `sudo`.
+
+```sh
+systemctl --user status speechmike-ptt       # state
+journalctl --user -u speechmike-ptt -f       # log
+systemctl --user restart speechmike-ptt      # apply config changes
+systemctl --user stop speechmike-ptt         # use the microphone normally
+./install.sh --uninstall                     # remove everything except your config
+```
+
+The microphone stays muted after the service stops. Unmute it in your sound settings if you want to
+use it without push-to-talk.
+
+To try it without installing, run `python3 -m speechmike_ptt` in the repository. Stop the service
+first, otherwise two instances run.
+
+## Usage
 
 The microphone is muted on start and opens while REC is held. It is muted again on exit, including
 Ctrl+C, SIGTERM and SIGHUP. If the program is killed with SIGKILL it cannot clean up, so the
-microphone keeps its last state.
+microphone keeps its last state. The service then restarts it after 2 seconds, which mutes it again.
 
 While the microphone should be muted, the program checks this every 2 seconds and mutes it again if
 another application or an audio server restart opened it. To use the microphone normally, stop the
@@ -61,12 +81,8 @@ This lists the detected HID interfaces and the audio source, then prints every r
 sends, with the bytes and bits that changed. It is read-only and does not touch the mute state.
 Serial numbers are masked, so the output is safe to paste into an issue.
 
-If the device is not readable, add this udev rule as
-`/etc/udev/rules.d/70-speechmike.rules`, then replug the device:
-
-```
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0911", ATTRS{idProduct}=="0c1c", TAG+="uaccess"
-```
+If the device is not readable, the udev rule from `packaging/70-speechmike.rules` is missing.
+`./install.sh` adds it.
 
 ## License
 

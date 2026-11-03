@@ -1,0 +1,2 @@
+# Gives the logged-in user access to the SpeechMike HID interfaces.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0911", ATTRS{idProduct}=="0c1c", TAG+="uaccess"

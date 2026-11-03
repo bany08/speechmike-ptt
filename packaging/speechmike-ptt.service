@@ -1,0 +1,13 @@
+[Unit]
+Description=Push-to-talk for the Philips SpeechMike
+Documentation=https://github.com/bany08/speechmike-ptt
+
+[Service]
+Environment=PYTHONPATH=%h/.local/share/speechmike-ptt
+ExecStart=/usr/bin/env python3 -m speechmike_ptt
+# After a crash the new instance mutes the microphone on start.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

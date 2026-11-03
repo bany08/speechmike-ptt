@@ -25,6 +25,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 - `speechmike_ptt/config.py`: config file. Invalid settings are errors, never silent fallbacks.
 - `speechmike_ptt/notify.py`: optional notifications. Must never block or break the switching.
 - `speechmike_ptt/cli.py`: argument parsing and the `--debug` mode.
+- `packaging/`: udev rule and systemd user unit, installed by `install.sh`.
 
 ## Roadmap
 1. Detection and `--debug` (done)
@@ -33,7 +34,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 4. `toggle` mode, config file `~/.config/speechmike-ptt/config.ini`, configurable button (done)
 5. Hotplug reconnect (done)
 6. Optional notifications (`notify-send`, off by default) (done)
-7. systemd user service, udev rule file, `install.sh` with uninstall
+7. systemd user service, udev rule file, `install.sh` with uninstall (done)
 8. Final README, test on a clean system
 
 Out of scope for now: LED control (output report format unknown; goes into the README roadmap),

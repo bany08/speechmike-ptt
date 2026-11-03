@@ -25,7 +25,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 
 ## Roadmap
 1. Detection and `--debug` (done)
-2. Map the remaining buttons with `--debug`
+2. Map the buttons with `--debug` (done for the LFH3200, index finger button unresolved)
 3. Mute control and `hold` mode, muted on start, exit and signals
 4. `toggle` mode, config file `~/.config/speechmike-ptt/config.ini`, configurable button
 5. Hotplug reconnect
@@ -43,8 +43,20 @@ testing on plain PulseAudio.
 - Interface 04 descriptor: vendor page 0xFFA0, 9-byte input, 9-byte output, no report ID.
 - sysfs values `idVendor`, `idProduct` and `bInterfaceNumber` are hex text.
 - Reports are 9 bytes and each one arrives twice. Evaluate state changes only.
-- The last byte is a button bitmask: 0x01 REC, 0x04 PLAY, 0x00 none. Bytes 1 to 5 change with
-  unknown meaning and are ignored.
+- Bytes 7 and 8 are a 16-bit big-endian button bitmask. Several buttons combine (REC+PLAY = 0x0005).
+  Bytes 1 to 5 change with unknown meaning and are ignored.
+
+  | Button | Mask | | Button | Mask |
+  | --- | --- | --- | --- | --- |
+  | REC | 0x0001 | | INS/OVR | 0x0040 |
+  | PLAY/PAUSE | 0x0004 | | F1 | 0x0200 |
+  | `>>` FWD | 0x0008 | | F2 | 0x0400 |
+  | `<<` REW | 0x0010 | | F3 | 0x0800 |
+  | EOL/PRIO | 0x0020 | | | |
+
+- EOL/PRIO sends the same bit for single and double press. PRIO is not a separate signal.
+- Left and right mouse buttons are not on interface 04. They report on interface 03 (4-byte mouse
+  report, byte 0: 0x01 left, 0x02 right). Interfaces 05 and 06 stayed silent for all buttons.
 
   ```
   REC pressed:    80 00 00 00 00 35 00 00 01
@@ -52,7 +64,13 @@ testing on plain PulseAudio.
   PLAY pressed:   80 34 00 08 00 02 00 00 04
   PLAY released:  80 20 00 20 4b 13 00 00 00
   ```
-- STOP, FWD, REW, EOL, INS/OVR and F1 to F4 are not mapped yet.
+- The LFH3200 has F1 to F3 only.
+- The EOL/PRIO and INS/OVR buttons have their own LEDs, in addition to the device LED.
+- Index finger button (inside of the device): unresolved. It produced no report on interface 04. On
+  interface 03 byte 0 went to 0x01 and no return to 0x00 was seen, also not after left clicks. The
+  button does not latch mechanically and no LED lights up when it is pressed. The captures suppressed
+  identical reports, so repeated presses may be hidden. Not usable for
+  push-to-talk as far as known.
 
 ## Audio facts
 - Source name: `alsa_input.usb-Philips_Speech_Processing_SpeechMike_III_<SERIAL>-00.mono-fallback`

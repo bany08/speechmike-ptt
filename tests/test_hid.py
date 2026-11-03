@@ -103,9 +103,29 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(PROFILE.decode_buttons(REC_UP), ([], 0))
         self.assertEqual(PROFILE.decode_buttons(PLAY_DOWN), (["PLAY"], 0))
 
+    def test_decodes_every_mapped_button(self):
+        observed = {
+            "REC": "0001",
+            "PLAY": "0004",
+            "FWD": "0008",
+            "REW": "0010",
+            "EOL_PRIO": "0020",
+            "INS_OVR": "0040",
+            "F1": "0200",
+            "F2": "0400",
+            "F3": "0800",
+        }
+        for name, mask in observed.items():
+            report = bytes.fromhex("8000000084" + "2a00" + mask)
+            self.assertEqual(PROFILE.decode_buttons(report), ([name], 0))
+
+    def test_decodes_two_buttons_at_once(self):
+        report = bytes.fromhex("802000 20c135 00 0005".replace(" ", ""))
+        self.assertEqual(PROFILE.decode_buttons(report), (["REC", "PLAY"], 0))
+
     def test_reports_unknown_bits(self):
-        report = bytes.fromhex("800000000000000012")
-        self.assertEqual(PROFILE.decode_buttons(report), ([], 0x12))
+        report = bytes.fromhex("800000000000008002")
+        self.assertEqual(PROFILE.decode_buttons(report), ([], 0x8002))
 
     def test_short_report(self):
         self.assertEqual(PROFILE.decode_buttons(b"\x80"), ([], 0))

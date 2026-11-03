@@ -11,7 +11,7 @@ daemon does not exist yet.
 
 | Device | USB ID | Status |
 | --- | --- | --- |
-| Philips SpeechMike III (LFH32xx) | `0911:0c1c` | tested: detection, REC and PLAY buttons |
+| Philips SpeechMike III (LFH3200) | `0911:0c1c` | tested: detection, all dictation and function buttons |
 
 ## Diagnostic mode
 

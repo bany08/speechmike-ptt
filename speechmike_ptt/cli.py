@@ -27,7 +27,7 @@ def format_report(profile: DeviceProfile, report: bytes, previous: Optional[byte
     """Return the output lines for one report."""
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     pressed, unknown = profile.decode_buttons(report)
-    labels = pressed + ([f"unknown 0x{unknown:02x}"] if unknown else [])
+    labels = pressed + ([f"unknown 0x{unknown:04x}"] if unknown else [])
     lines = [f"{timestamp}  {report.hex(' ')}  buttons: {', '.join(labels) or 'none'}"]
     if len(report) != profile.report_size:
         lines.append(f"    unexpected length: {len(report)} bytes, expected {profile.report_size}")

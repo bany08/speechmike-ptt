@@ -9,6 +9,7 @@ from speechmike_ptt.audio import (
     mask_serial,
     parse_sources,
     select_source,
+    set_source_mute,
 )
 from speechmike_ptt.devices import DEVICES
 
@@ -82,6 +83,20 @@ class ListSourcesTest(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess([], 0, PACTL_OUTPUT, "")
         self.assertEqual(len(list_sources()), 3)
         self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+
+    @mock.patch("speechmike_ptt.audio.subprocess.run")
+    def test_set_mute_arguments(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "", "")
+        set_source_mute(MIC_A, True)
+        self.assertEqual(run.call_args.args[0], ["pactl", "set-source-mute", MIC_A, "1"])
+        set_source_mute(MIC_A, False)
+        self.assertEqual(run.call_args.args[0], ["pactl", "set-source-mute", MIC_A, "0"])
+
+    @mock.patch("speechmike_ptt.audio.subprocess.run")
+    def test_set_mute_failure(self, run):
+        run.return_value = subprocess.CompletedProcess([], 1, "", "No such entity")
+        with self.assertRaises(AudioError):
+            set_source_mute(MIC_A, True)
 
     @mock.patch("speechmike_ptt.audio.subprocess.run", side_effect=FileNotFoundError)
     def test_missing_pactl(self, _run):

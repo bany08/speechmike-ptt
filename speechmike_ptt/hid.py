@@ -112,6 +112,15 @@ def find_hid_interfaces(
     return found
 
 
+def udev_hint(profile: DeviceProfile) -> str:
+    return (
+        f"No read access to the device. Add this udev rule as "
+        f"/etc/udev/rules.d/70-speechmike.rules and replug the device:\n\n"
+        f'  SUBSYSTEM=="hidraw", ATTRS{{idVendor}}=="{profile.vendor_id:04x}", '
+        f'ATTRS{{idProduct}}=="{profile.product_id:04x}", TAG+="uaccess"\n'
+    )
+
+
 def read_reports(node: str) -> Iterator[bytes]:
     """Yield reports from a hidraw node until the device goes away.
 

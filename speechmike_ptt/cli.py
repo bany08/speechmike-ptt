@@ -3,24 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import signal
 import sys
 from datetime import datetime
 from typing import List, Optional, Sequence
 
-from . import __version__
+from . import __version__, daemon
 from .audio import AudioError, list_sources, mask_serial, select_source
 from .devices import DEVICES, DeviceProfile
-from .hid import DeviceGone, HidInterface, diff_reports, find_hid_interfaces, read_reports
-
-
-def _udev_hint(profile: DeviceProfile) -> str:
-    return (
-        f"No read access to the device. Add this udev rule as "
-        f"/etc/udev/rules.d/70-speechmike.rules and replug the device:\n\n"
-        f'  SUBSYSTEM=="hidraw", ATTRS{{idVendor}}=="{profile.vendor_id:04x}", '
-        f'ATTRS{{idProduct}}=="{profile.product_id:04x}", TAG+="uaccess"\n'
-    )
+from .hid import (
+    DeviceGone,
+    HidInterface,
+    diff_reports,
+    find_hid_interfaces,
+    read_reports,
+    udev_hint,
+)
 
 
 def format_report(profile: DeviceProfile, report: bytes, previous: Optional[bytes]) -> List[str]:
@@ -91,7 +90,7 @@ def run_debug() -> int:
     if len(button_interfaces) > 1:
         print(f"{len(button_interfaces)} devices found, using only {target.node}.\n")
     if not target.readable:
-        print(_udev_hint(target.profile))
+        print(udev_hint(target.profile))
         return 1
 
     print(f"Reading {target.node}. Press buttons, Ctrl+C to stop.\n")
@@ -102,7 +101,7 @@ def run_debug() -> int:
                 print("\n".join(format_report(target.profile, report, previous)))
                 previous = report
     except PermissionError:
-        print(_udev_hint(target.profile))
+        print(udev_hint(target.profile))
         return 1
     except DeviceGone:
         print("Device disconnected.")
@@ -115,7 +114,8 @@ def run_debug() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="speechmike-ptt",
-        description="Push-to-talk for the Philips SpeechMike on Linux.",
+        description="Push-to-talk for the Philips SpeechMike on Linux. "
+        "Keeps the microphone muted and opens it while REC is held.",
     )
     parser.add_argument(
         "--debug",
@@ -125,13 +125,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
 
-    if not args.debug:
-        print("The push-to-talk daemon is not implemented yet. Use --debug.", file=sys.stderr)
-        return 2
-
     sys.stdout.reconfigure(line_buffering=True)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    # Turn these into KeyboardInterrupt so that cleanup code runs.
     signal.signal(signal.SIGTERM, signal.default_int_handler)
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     try:
-        return run_debug()
+        return run_debug() if args.debug else daemon.run()
     except KeyboardInterrupt:
         return 0

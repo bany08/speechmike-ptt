@@ -36,12 +36,12 @@ def parse_sources(text: str) -> List[Source]:
     return sources
 
 
-def list_sources() -> List[Source]:
+def _pactl(*args: str) -> str:
     # pactl output is localized, so pin the locale.
     env = {**os.environ, "LC_ALL": "C"}
     try:
         result = subprocess.run(
-            ["pactl", "list", "short", "sources"],
+            ["pactl", *args],
             env=env,
             capture_output=True,
             text=True,
@@ -53,7 +53,15 @@ def list_sources() -> List[Source]:
         raise AudioError("pactl did not respond") from exc
     if result.returncode != 0:
         raise AudioError(f"pactl failed: {result.stderr.strip()}")
-    return parse_sources(result.stdout)
+    return result.stdout
+
+
+def list_sources() -> List[Source]:
+    return parse_sources(_pactl("list", "short", "sources"))
+
+
+def set_source_mute(name: str, muted: bool) -> None:
+    _pactl("set-source-mute", name, "1" if muted else "0")
 
 
 def select_source(

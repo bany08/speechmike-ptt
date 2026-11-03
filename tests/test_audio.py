@@ -5,6 +5,7 @@ from unittest import mock
 from speechmike_ptt.audio import (
     AudioError,
     Source,
+    get_source_mute,
     list_sources,
     mask_serial,
     parse_sources,
@@ -91,6 +92,19 @@ class ListSourcesTest(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["pactl", "set-source-mute", MIC_A, "1"])
         set_source_mute(MIC_A, False)
         self.assertEqual(run.call_args.args[0], ["pactl", "set-source-mute", MIC_A, "0"])
+
+    @mock.patch("speechmike_ptt.audio.subprocess.run")
+    def test_get_mute(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "Mute: yes\n", "")
+        self.assertTrue(get_source_mute(MIC_A))
+        run.return_value = subprocess.CompletedProcess([], 0, "Mute: no\n", "")
+        self.assertFalse(get_source_mute(MIC_A))
+
+    @mock.patch("speechmike_ptt.audio.subprocess.run")
+    def test_get_mute_rejects_unknown_output(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "Stumm: nein\n", "")
+        with self.assertRaises(AudioError):
+            get_source_mute(MIC_A)
 
     @mock.patch("speechmike_ptt.audio.subprocess.run")
     def test_set_mute_failure(self, run):

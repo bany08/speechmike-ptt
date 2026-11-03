@@ -24,6 +24,7 @@ class Config:
     mode: str = "hold"
     button: str = "REC"
     source: Optional[str] = None  # overrides the automatic source detection
+    notify: bool = False  # desktop notification on every switch
 
 
 def config_path() -> str:
@@ -50,7 +51,7 @@ def load_config(path: Optional[str] = None) -> Config:
         return Config()
 
     values = dict(parser[SECTION])
-    unknown_keys = set(values) - {"mode", "button", "source"}
+    unknown_keys = set(values) - {"mode", "button", "source", "notify"}
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
 
@@ -61,4 +62,8 @@ def load_config(path: Optional[str] = None) -> Config:
     button = values.get("button", defaults.button).upper()
     if not button:
         raise ConfigError(f"{path}: button is empty")
-    return Config(mode=mode, button=button, source=values.get("source") or None)
+    try:
+        notify = parser.getboolean(SECTION, "notify", fallback=defaults.notify)
+    except ValueError as exc:
+        raise ConfigError(f"{path}: notify must be true or false") from exc
+    return Config(mode=mode, button=button, source=values.get("source") or None, notify=notify)

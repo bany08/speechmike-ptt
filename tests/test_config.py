@@ -37,6 +37,16 @@ class LoadConfigTest(unittest.TestCase):
     def test_percent_in_value_is_literal(self):
         self.assertEqual(self.load("[speechmike-ptt]\nsource = a%b\n").source, "a%b")
 
+    def test_notify_is_off_by_default(self):
+        self.assertFalse(self.load("[speechmike-ptt]\nmode = hold\n").notify)
+
+    def test_notify_on(self):
+        self.assertTrue(self.load("[speechmike-ptt]\nnotify = true\n").notify)
+
+    def test_invalid_notify(self):
+        with self.assertRaisesRegex(ConfigError, "notify must be"):
+            self.load("[speechmike-ptt]\nnotify = maybe\n")
+
     def test_invalid_mode(self):
         with self.assertRaisesRegex(ConfigError, "mode must be"):
             self.load("[speechmike-ptt]\nmode = always\n")

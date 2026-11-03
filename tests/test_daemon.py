@@ -101,6 +101,76 @@ class PushToTalkTest(QuietTestCase):
             self.ptt.handle_report(IDLE)
 
 
+class NotificationTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeMute()
+        self.changes = []
+        self.ptt = PushToTalk(PROFILE, "REC", self.fake, on_change=self.changes.append)
+
+    def test_reports_each_switch_once(self):
+        for report in (REC, REC, IDLE, IDLE):
+            self.ptt.handle_report(report)
+        self.assertEqual(self.changes, [True, False])
+
+    def test_failed_open_does_not_claim_open(self):
+        self.fake.fail_open = True
+        self.ptt.handle_report(REC)
+        self.assertEqual(self.changes, [])
+
+
+class EnforceMuteTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeMute()
+        self.muted = True
+        self.ptt = PushToTalk(PROFILE, "REC", self.fake, is_muted=self.read_state)
+
+    def read_state(self):
+        if isinstance(self.muted, Exception):
+            raise self.muted
+        return self.muted
+
+    def test_muted_source_is_left_alone(self):
+        self.ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [])
+
+    def test_mutes_a_source_that_was_opened_from_outside(self):
+        self.muted = False
+        self.ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [True])
+
+    def test_open_microphone_is_not_touched(self):
+        self.ptt.handle_report(REC)
+        self.muted = False
+        self.ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [False])
+
+    def test_toggle_open_microphone_is_not_touched(self):
+        ptt = PushToTalk(PROFILE, "REC", self.fake, mode="toggle", is_muted=self.read_state)
+        for report in (REC, IDLE):
+            ptt.handle_report(report)
+        self.muted = False
+        ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [False])
+
+    def test_failed_check_is_survived_and_retried(self):
+        self.muted = AudioError("no server")
+        self.ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [])
+        self.muted = False
+        self.ptt.enforce_mute()
+        self.assertEqual(self.fake.calls, [True])
+
+    def test_failed_check_warns_once(self):
+        logging.disable(logging.NOTSET)
+        self.muted = AudioError("no server")
+        with self.assertLogs("speechmike_ptt.daemon", "WARNING") as logs:
+            self.ptt.enforce_mute()
+            self.ptt.enforce_mute()
+        self.assertEqual(len(logs.output), 1)
+
+
 class ToggleTest(QuietTestCase):
     def setUp(self):
         super().setUp()
@@ -165,6 +235,7 @@ class RunTest(QuietTestCase):
         self.patch("find_hid_interfaces", return_value=[self.interface])
         self.patch("list_sources", return_value=[Source(SOURCE, "SUSPENDED")])
         self.patch("set_source_mute", side_effect=set_source_mute)
+        self.get_mute = self.patch("get_source_mute", return_value=True)
         self.read = self.patch("read_reports")
         # By default the first wait ends the run, so run() cannot loop forever.
         self.wait = self.patch("wait_for_device", side_effect=KeyboardInterrupt)
@@ -183,7 +254,7 @@ class RunTest(QuietTestCase):
         return daemon.run()
 
     def test_mutes_before_reading(self):
-        def check(_node):
+        def check(_node, _timeout=None):
             self.assertEqual(self.mute_calls, [True])
             return reports(KeyboardInterrupt)
 
@@ -202,7 +273,7 @@ class RunTest(QuietTestCase):
         self.wait.side_effect = [None, KeyboardInterrupt]
         calls_at_reconnect = []
 
-        def read(_node):
+        def read(_node, _timeout=None):
             if self.read.call_count == 1:
                 return reports(REC, DeviceGone("x"))
             calls_at_reconnect.extend(self.mute_calls)
@@ -220,7 +291,7 @@ class RunTest(QuietTestCase):
         self.assertEqual(self.mute_calls.count(False), 1)
 
     def test_source_gone_with_the_device_is_not_an_error(self):
-        def read(_node):
+        def read(_node, _timeout=None):
             self.fail_mute = True
             daemon.list_sources.return_value = []
             return reports(DeviceGone("x"))
@@ -229,7 +300,7 @@ class RunTest(QuietTestCase):
         self.assertEqual(daemon.run(), 0)
 
     def test_mute_failure_with_source_present_is_fatal(self):
-        def read(_node):
+        def read(_node, _timeout=None):
             self.fail_mute = True
             return reports(DeviceGone("x"))
 
@@ -260,7 +331,7 @@ class RunTest(QuietTestCase):
         self.assertNotIn(False, self.mute_calls)
 
     def test_failed_final_mute_is_an_error(self):
-        def fail_after_open(_node):
+        def fail_after_open(_node, _timeout=None):
             self.fail_mute = True
             return reports(KeyboardInterrupt)
 
@@ -294,6 +365,37 @@ class RunTest(QuietTestCase):
         self.assertEqual(daemon.run(Config(source="alsa_input.missing")), 0)
         self.wait.assert_called_once()
         self.read.assert_not_called()
+
+    def test_notifies_only_when_enabled(self):
+        notify = self.patch("Notifier").return_value
+        self.read.return_value = reports(REC, IDLE, KeyboardInterrupt)
+        daemon.run(Config())
+        notify.assert_not_called()
+        self.read.return_value = reports(REC, IDLE, KeyboardInterrupt)
+        daemon.run(Config(notify=True))
+        self.assertEqual([call.args[0] for call in notify.call_args_list], [True, False])
+
+    def test_notifies_when_the_session_ends_with_an_open_microphone(self):
+        notify = self.patch("Notifier").return_value
+        self.read.return_value = reports(REC, DeviceGone("x"))
+        daemon.run(Config(notify=True))
+        self.assertEqual([call.args[0] for call in notify.call_args_list], [True, False])
+
+    def test_waits_for_notifications_before_exiting(self):
+        notify = self.patch("Notifier").return_value
+        self.read.return_value = reports(KeyboardInterrupt)
+        daemon.run(Config(notify=True))
+        notify.flush.assert_called_once()
+
+    def test_idle_timeout_checks_the_mute_state(self):
+        self.get_mute.return_value = False
+        self.assertEqual(self.run_with(None, KeyboardInterrupt), 0)
+        self.get_mute.assert_called_once_with(SOURCE)
+        self.assertEqual(self.mute_calls, [True, True, True])
+
+    def test_reads_with_a_timeout(self):
+        self.run_with(KeyboardInterrupt)
+        self.read.assert_called_once_with("/dev/hidraw9", daemon.MUTE_CHECK_SECONDS)
 
     def test_waits_for_the_device(self):
         daemon.find_hid_interfaces.return_value = []

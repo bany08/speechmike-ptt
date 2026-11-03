@@ -60,6 +60,15 @@ def list_sources() -> List[Source]:
     return parse_sources(_pactl("list", "short", "sources"))
 
 
+def get_source_mute(name: str) -> bool:
+    output = _pactl("get-source-mute", name).strip()
+    if output == "Mute: yes":
+        return True
+    if output == "Mute: no":
+        return False
+    raise AudioError(f"Unexpected pactl output: {output}")
+
+
 def set_source_mute(name: str, muted: bool) -> None:
     _pactl("set-source-mute", name, "1" if muted else "0")
 

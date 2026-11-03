@@ -25,6 +25,10 @@ The microphone is muted on start and opens while REC is held. It is muted again 
 Ctrl+C, SIGTERM and SIGHUP. If the program is killed with SIGKILL it cannot clean up, so the
 microphone keeps its last state.
 
+While the microphone should be muted, the program checks this every 2 seconds and mutes it again if
+another application or an audio server restart opened it. To use the microphone normally, stop the
+program.
+
 The device can be unplugged and plugged in at any time. If it is missing, the program waits for it,
 and it mutes the microphone before it reacts to any button after reconnecting.
 
@@ -40,6 +44,8 @@ mode = hold
 button = REC
 # Optional: use this audio source instead of detecting it (see `pactl list short sources`)
 # source =
+# Desktop notification on every switch, if notify-send is installed
+notify = false
 ```
 
 In toggle mode the microphone stays open until the next press, so it listens until you close it.

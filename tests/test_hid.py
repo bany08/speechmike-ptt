@@ -4,7 +4,7 @@ import unittest
 
 from speechmike_ptt.cli import format_report
 from speechmike_ptt.devices import DEVICES
-from speechmike_ptt.hid import diff_reports, find_hid_interfaces
+from speechmike_ptt.hid import DeviceGone, diff_reports, find_hid_interfaces, read_reports
 
 PROFILE = DEVICES[0]
 
@@ -90,6 +90,42 @@ class FindHidInterfacesTest(unittest.TestCase):
 
     def test_no_hidraw_class(self):
         self.assertEqual(find_hid_interfaces(sysfs_root=self.dev, dev_root=self.dev), [])
+
+
+class ReadReportsTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.node = os.path.join(tmp.name, "fifo")
+        os.mkfifo(self.node)
+        # Opened for reading and writing, so that opening the reader does not block.
+        self.writer = os.open(self.node, os.O_RDWR)
+
+    def tearDown(self):
+        if self.writer is not None:
+            os.close(self.writer)
+
+    def test_yields_none_on_timeout_and_then_data(self):
+        reader = read_reports(self.node, timeout=0.01)
+        self.assertIsNone(next(reader))
+        os.write(self.writer, b"\x80\x01")
+        self.assertEqual(next(reader), b"\x80\x01")
+        reader.close()
+
+    def test_without_timeout_returns_data(self):
+        os.write(self.writer, b"\x80\x01")
+        reader = read_reports(self.node)
+        self.assertEqual(next(reader), b"\x80\x01")
+        reader.close()
+
+    def test_end_of_data_means_device_gone(self):
+        reader = read_reports(self.node, timeout=1)
+        os.write(self.writer, b"\x80")
+        next(reader)
+        os.close(self.writer)
+        self.writer = None
+        with self.assertRaises(DeviceGone):
+            next(reader)
 
 
 REC_DOWN = bytes.fromhex("800000000035000001")

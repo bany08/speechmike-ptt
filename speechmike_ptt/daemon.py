@@ -10,6 +10,7 @@ from typing import Callable, Optional, Tuple
 from .audio import (
     AudioError,
     Source,
+    get_source_mute,
     list_sources,
     mask_serial,
     select_source,
@@ -18,12 +19,15 @@ from .audio import (
 from .config import Config, ConfigError
 from .devices import DeviceProfile
 from .hid import DeviceGone, HidInterface, find_hid_interfaces, read_reports, udev_hint
+from .notify import Notifier
 
 log = logging.getLogger(__name__)
 
 MUTE_ATTEMPTS = 3
 MUTE_RETRY_DELAY_SECONDS = 0.2
 DEVICE_POLL_SECONDS = 1.0
+NOTIFY_FLUSH_SECONDS = 1.0
+MUTE_CHECK_SECONDS = 2.0
 
 SetMute = Callable[[bool], None]
 
@@ -65,12 +69,17 @@ class PushToTalk:
         set_mute: SetMute,
         mode: str = "hold",
         source_exists: Optional[Callable[[], bool]] = None,
+        on_change: Optional[Callable[[bool], None]] = None,
+        is_muted: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.profile = profile
         self.button = button
         self.set_mute = set_mute
         self.mode = mode
         self.source_exists = source_exists
+        self.on_change = on_change or (lambda is_open: None)
+        self.is_muted = is_muted
+        self.check_failing = False
         self.is_open = False
         self.was_held = False
 
@@ -92,6 +101,23 @@ class PushToTalk:
     def mute(self) -> None:
         mute(self.set_mute, self.source_exists)
 
+    def enforce_mute(self) -> None:
+        """Mute again if something else opened the microphone behind our back."""
+        if self.is_open or self.is_muted is None:
+            return
+        try:
+            muted = self.is_muted()
+        except AudioError as exc:
+            # For example an audio server restart. Try again on the next check.
+            if not self.check_failing:
+                log.warning("Could not check the mute state: %s", exc)
+            self.check_failing = True
+            return
+        self.check_failing = False
+        if not muted:
+            log.warning("The microphone was unmuted from outside. Muting it again.")
+            self.mute()
+
     def _open(self) -> None:
         try:
             self.set_mute(False)
@@ -102,11 +128,13 @@ class PushToTalk:
             return
         self.is_open = True
         log.info("Microphone open")
+        self.on_change(True)
 
     def _close(self) -> None:
         self.mute()
         self.is_open = False
         log.info("Microphone muted")
+        self.on_change(False)
 
 
 def find_target(config: Config) -> Tuple[HidInterface, Source]:
@@ -135,7 +163,12 @@ def find_target(config: Config) -> Tuple[HidInterface, Source]:
     return target, source
 
 
-def run_session(target: HidInterface, source: Source, config: Config) -> None:
+def run_session(
+    target: HidInterface,
+    source: Source,
+    config: Config,
+    notifier: Optional[Notifier] = None,
+) -> None:
     """Serve one connected device until it goes away. Always ends muted."""
 
     def set_mute(muted: bool) -> None:
@@ -152,10 +185,21 @@ def run_session(target: HidInterface, source: Source, config: Config) -> None:
     action = "Hold" if config.mode == "hold" else "Press"
     log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
 
-    ptt = PushToTalk(target.profile, config.button, set_mute, config.mode, source_exists)
+    ptt = PushToTalk(
+        target.profile,
+        config.button,
+        set_mute,
+        config.mode,
+        source_exists,
+        notifier,
+        lambda: get_source_mute(source.name),
+    )
     try:
-        for report in read_reports(target.node):
-            ptt.handle_report(report)
+        for report in read_reports(target.node, MUTE_CHECK_SECONDS):
+            if report is None:
+                ptt.enforce_mute()
+            else:
+                ptt.handle_report(report)
     finally:
         # A signal must not interrupt the final mute.
         handled = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -163,6 +207,8 @@ def run_session(target: HidInterface, source: Source, config: Config) -> None:
         try:
             mute(set_mute, source_exists)
             log.info("Microphone muted.")
+            if ptt.is_open:
+                ptt.on_change(False)
         except AudioError as exc:
             log.error("COULD NOT MUTE THE MICROPHONE: %s", exc)
             raise
@@ -178,6 +224,7 @@ def wait_for_device() -> None:
 def run(config: Config = Config()) -> int:
     """Serve the device across reconnects until interrupted. Returns the exit code."""
     last_message = None
+    notifier = Notifier() if config.notify else None
 
     def report_once(message: str, level: int = logging.INFO) -> None:
         nonlocal last_message
@@ -189,7 +236,7 @@ def run(config: Config = Config()) -> int:
         while True:
             try:
                 target, source = find_target(config)
-                run_session(target, source, config)
+                run_session(target, source, config, notifier)
             except NotReady as exc:
                 report_once(f"{exc} Waiting.")
             except PermissionError:
@@ -208,3 +255,6 @@ def run(config: Config = Config()) -> int:
     except AudioError as exc:
         log.error("Exiting because of an audio error: %s", exc)
         return 1
+    finally:
+        if notifier is not None:
+            notifier.flush(NOTIFY_FLUSH_SECONDS)

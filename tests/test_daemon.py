@@ -5,6 +5,7 @@ from unittest import mock
 
 from speechmike_ptt import daemon
 from speechmike_ptt.audio import AudioError, Source
+from speechmike_ptt.config import Config
 from speechmike_ptt.daemon import PushToTalk
 from speechmike_ptt.devices import DEVICES
 from speechmike_ptt.hid import DeviceGone, HidInterface
@@ -100,6 +101,44 @@ class PushToTalkTest(QuietTestCase):
             self.ptt.handle_report(IDLE)
 
 
+class ToggleTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeMute()
+        self.ptt = PushToTalk(PROFILE, "REC", self.fake, mode="toggle")
+
+    def test_press_opens_and_stays_open_after_release(self):
+        for report in (REC, REC, IDLE, IDLE):
+            self.ptt.handle_report(report)
+        self.assertTrue(self.ptt.is_open)
+        self.assertEqual(self.fake.calls, [False])
+
+    def test_second_press_mutes(self):
+        for report in (REC, IDLE, REC, IDLE):
+            self.ptt.handle_report(report)
+        self.assertFalse(self.ptt.is_open)
+        self.assertEqual(self.fake.calls, [False, True])
+
+    def test_other_button_while_held_is_not_a_second_press(self):
+        for report in (REC, REC_AND_PLAY, REC):
+            self.ptt.handle_report(report)
+        self.assertTrue(self.ptt.is_open)
+
+    def test_other_button_alone_does_nothing(self):
+        for report in (PLAY, IDLE):
+            self.ptt.handle_report(report)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_failed_open_stays_muted_and_next_press_retries(self):
+        self.fake.fail_open = True
+        self.ptt.handle_report(REC)
+        self.ptt.handle_report(IDLE)
+        self.assertFalse(self.ptt.is_open)
+        self.fake.fail_open = False
+        self.ptt.handle_report(REC)
+        self.assertTrue(self.ptt.is_open)
+
+
 def reports(*items):
     """Yield reports, raising any item that is an exception."""
     for item in items:
@@ -179,6 +218,33 @@ class RunTest(QuietTestCase):
 
         self.read.side_effect = fail_after_open
         self.assertEqual(daemon.run(), 1)
+
+    def test_toggle_open_at_exit_mutes(self):
+        self.read.return_value = reports(REC, IDLE, KeyboardInterrupt)
+        self.assertEqual(daemon.run(Config(mode="toggle")), 0)
+        self.assertEqual(self.mute_calls, [True, False, True])
+
+    def test_configured_button(self):
+        self.read.return_value = reports(REC, PLAY, KeyboardInterrupt)
+        self.assertEqual(daemon.run(Config(button="PLAY")), 0)
+        self.assertEqual(self.mute_calls, [True, False, True])
+
+    def test_unknown_button(self):
+        self.assertEqual(daemon.run(Config(button="NOPE")), 1)
+        self.read.assert_not_called()
+        self.assertEqual(self.mute_calls, [])
+
+    def test_configured_source_is_used(self):
+        other = "alsa_input.other"
+        daemon.list_sources.return_value = [Source(SOURCE, "IDLE"), Source(other, "IDLE")]
+        daemon.set_source_mute.side_effect = lambda name, muted: self.mute_calls.append(name)
+        self.read.return_value = reports(KeyboardInterrupt)
+        self.assertEqual(daemon.run(Config(source=other)), 0)
+        self.assertEqual(set(self.mute_calls), {other})
+
+    def test_configured_source_must_exist(self):
+        self.assertEqual(daemon.run(Config(source="alsa_input.missing")), 1)
+        self.read.assert_not_called()
 
     def test_no_device(self):
         daemon.find_hid_interfaces.return_value = []

@@ -11,6 +11,7 @@ from typing import List, Optional, Sequence
 
 from . import __version__, daemon
 from .audio import AudioError, list_sources, mask_serial, select_source
+from .config import ConfigError, load_config
 from .devices import DEVICES, DeviceProfile
 from .hid import (
     DeviceGone,
@@ -115,7 +116,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="speechmike-ptt",
         description="Push-to-talk for the Philips SpeechMike on Linux. "
-        "Keeps the microphone muted and opens it while REC is held.",
+        "Keeps the microphone muted and opens it with a button.",
     )
     parser.add_argument(
         "--debug",
@@ -132,6 +133,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     signal.signal(signal.SIGHUP, signal.default_int_handler)
     try:
-        return run_debug() if args.debug else daemon.run()
+        if args.debug:
+            return run_debug()
+        return daemon.run(load_config())
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         return 0

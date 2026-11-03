@@ -22,13 +22,14 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 - `speechmike_ptt/hid.py`: sysfs discovery, report reading, bit diff.
 - `speechmike_ptt/audio.py`: `pactl` wrapper, source discovery, mute, serial masking.
 - `speechmike_ptt/daemon.py`: push-to-talk logic and main loop, muted on every exit path.
+- `speechmike_ptt/config.py`: config file. Invalid settings are errors, never silent fallbacks.
 - `speechmike_ptt/cli.py`: argument parsing and the `--debug` mode.
 
 ## Roadmap
 1. Detection and `--debug` (done)
 2. Map the buttons with `--debug` (done for the LFH3200, index finger button unresolved)
 3. Mute control and `hold` mode, muted on start, exit and signals (done)
-4. `toggle` mode, config file `~/.config/speechmike-ptt/config.ini`, configurable button
+4. `toggle` mode, config file `~/.config/speechmike-ptt/config.ini`, configurable button (done)
 5. Hotplug reconnect
 6. Optional notifications (`notify-send`, can be disabled)
 7. systemd user service, udev rule file, `install.sh` with uninstall

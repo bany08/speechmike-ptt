@@ -8,12 +8,12 @@ import time
 from typing import Callable
 
 from .audio import AudioError, list_sources, mask_serial, select_source, set_source_mute
+from .config import Config
 from .devices import DeviceProfile
 from .hid import DeviceGone, find_hid_interfaces, read_reports, udev_hint
 
 log = logging.getLogger(__name__)
 
-PTT_BUTTON = "REC"
 MUTE_ATTEMPTS = 3
 MUTE_RETRY_DELAY_SECONDS = 0.2
 
@@ -34,17 +34,30 @@ def mute(set_mute: SetMute) -> None:
 
 
 class PushToTalk:
-    """Hold mode: the microphone is open exactly while the button is held."""
+    """Decide from button reports whether the microphone is open.
 
-    def __init__(self, profile: DeviceProfile, button: str, set_mute: SetMute) -> None:
+    hold: open exactly while the button is held.
+    toggle: each press of the button switches between open and muted.
+    """
+
+    def __init__(
+        self, profile: DeviceProfile, button: str, set_mute: SetMute, mode: str = "hold"
+    ) -> None:
         self.profile = profile
         self.button = button
         self.set_mute = set_mute
+        self.mode = mode
         self.is_open = False
+        self.was_held = False
 
     def handle_report(self, report: bytes) -> None:
         pressed, _ = self.profile.decode_buttons(report)
-        want_open = self.button in pressed
+        held = self.button in pressed
+        if self.mode == "toggle":
+            want_open = self.is_open != (held and not self.was_held)
+        else:
+            want_open = held
+        self.was_held = held
         if want_open == self.is_open:
             return
         if want_open:
@@ -69,7 +82,7 @@ class PushToTalk:
         log.info("Microphone muted")
 
 
-def run() -> int:
+def run(config: Config = Config()) -> int:
     """Run until interrupted. Returns the process exit code."""
     interfaces = [item for item in find_hid_interfaces() if item.carries_buttons]
     if not interfaces:
@@ -77,14 +90,26 @@ def run() -> int:
         return 1
     target = interfaces[0]
 
+    if config.button not in target.profile.buttons:
+        known = ", ".join(target.profile.buttons)
+        log.error("Unknown button %s for %s. Known: %s", config.button, target.profile.name, known)
+        return 1
+
     try:
-        source = select_source(list_sources(), target.profile, target.serial)
+        sources = list_sources()
     except AudioError as exc:
         log.error("%s", exc)
         return 1
-    if source is None:
-        log.error("No unique audio source found for %s.", target.profile.name)
-        return 1
+    if config.source:
+        source = next((item for item in sources if item.name == config.source), None)
+        if source is None:
+            log.error("The configured audio source does not exist.")
+            return 1
+    else:
+        source = select_source(sources, target.profile, target.serial)
+        if source is None:
+            log.error("No unique audio source found for %s.", target.profile.name)
+            return 1
 
     def set_mute(muted: bool) -> None:
         set_source_mute(source.name, muted)
@@ -96,9 +121,10 @@ def run() -> int:
         return 1
 
     log.info("Using %s and %s", target.node, mask_serial(source.name, target.serial))
-    log.info("Microphone muted. Hold %s to talk.", PTT_BUTTON)
+    action = "Hold" if config.mode == "hold" else "Press"
+    log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
 
-    ptt = PushToTalk(target.profile, PTT_BUTTON, set_mute)
+    ptt = PushToTalk(target.profile, config.button, set_mute, config.mode)
     exit_code = 0
     try:
         for report in read_reports(target.node):

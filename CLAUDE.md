@@ -30,7 +30,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 2. Map the buttons with `--debug` (done for the LFH3200, index finger button unresolved)
 3. Mute control and `hold` mode, muted on start, exit and signals (done)
 4. `toggle` mode, config file `~/.config/speechmike-ptt/config.ini`, configurable button (done)
-5. Hotplug reconnect
+5. Hotplug reconnect (done)
 6. Optional notifications (`notify-send`, can be disabled)
 7. systemd user service, udev rule file, `install.sh` with uninstall
 8. Final README, test on a clean system

@@ -4,8 +4,8 @@ Push-to-talk for the Philips SpeechMike on Linux: the microphone stays muted and
 while the REC button is held. Useful for voice control of AI assistants, without a microphone
 that listens all the time. Philips ships no Linux software for these devices.
 
-**Status: early development.** Hold and toggle mode work when started by hand. There is no system
-service or automatic reconnect yet.
+**Status: early development.** Hold mode, toggle mode and automatic reconnect work when started by
+hand. There is no system service yet.
 
 ## Supported devices
 
@@ -22,8 +22,11 @@ python3 -m speechmike_ptt
 ```
 
 The microphone is muted on start and opens while REC is held. It is muted again on exit, including
-Ctrl+C, SIGTERM, SIGHUP and when the device is unplugged. If the program is killed with SIGKILL it
-cannot clean up, so the microphone keeps its last state.
+Ctrl+C, SIGTERM and SIGHUP. If the program is killed with SIGKILL it cannot clean up, so the
+microphone keeps its last state.
+
+The device can be unplugged and plugged in at any time. If it is missing, the program waits for it,
+and it mutes the microphone before it reacts to any button after reconnecting.
 
 ## Configuration
 

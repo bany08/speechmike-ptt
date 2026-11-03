@@ -166,6 +166,8 @@ class RunTest(QuietTestCase):
         self.patch("list_sources", return_value=[Source(SOURCE, "SUSPENDED")])
         self.patch("set_source_mute", side_effect=set_source_mute)
         self.read = self.patch("read_reports")
+        # By default the first wait ends the run, so run() cannot loop forever.
+        self.wait = self.patch("wait_for_device", side_effect=KeyboardInterrupt)
 
         # run() ignores signals in its cleanup. Restore them after each test.
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
@@ -193,16 +195,62 @@ class RunTest(QuietTestCase):
         self.assertEqual(self.mute_calls, [True, False, True])
 
     def test_unplug_while_open_mutes(self):
-        self.assertEqual(self.run_with(REC, DeviceGone("x")), 1)
-        self.assertEqual(self.mute_calls[-1], True)
+        self.assertEqual(self.run_with(REC, DeviceGone("x")), 0)
+        self.assertEqual(self.mute_calls, [True, False, True])
+
+    def test_reconnect_mutes_before_reading_again(self):
+        self.wait.side_effect = [None, KeyboardInterrupt]
+        calls_at_reconnect = []
+
+        def read(_node):
+            if self.read.call_count == 1:
+                return reports(REC, DeviceGone("x"))
+            calls_at_reconnect.extend(self.mute_calls)
+            return reports(KeyboardInterrupt)
+
+        self.read.side_effect = read
+        self.assertEqual(daemon.run(), 0)
+        self.assertEqual(self.read.call_count, 2)
+        self.assertEqual(calls_at_reconnect, [True, False, True, True])
+
+    def test_held_button_does_not_survive_a_reconnect(self):
+        self.wait.side_effect = [None, KeyboardInterrupt]
+        self.read.side_effect = [reports(REC, DeviceGone("x")), reports(IDLE, KeyboardInterrupt)]
+        self.assertEqual(daemon.run(), 0)
+        self.assertEqual(self.mute_calls.count(False), 1)
+
+    def test_source_gone_with_the_device_is_not_an_error(self):
+        def read(_node):
+            self.fail_mute = True
+            daemon.list_sources.return_value = []
+            return reports(DeviceGone("x"))
+
+        self.read.side_effect = read
+        self.assertEqual(daemon.run(), 0)
+
+    def test_mute_failure_with_source_present_is_fatal(self):
+        def read(_node):
+            self.fail_mute = True
+            return reports(DeviceGone("x"))
+
+        self.read.side_effect = read
+        self.assertEqual(daemon.run(), 1)
+
+    def test_signals_work_again_after_a_session(self):
+        before = signal.getsignal(signal.SIGTERM)
+        self.run_with(DeviceGone("x"))
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
 
     def test_unexpected_exception_still_mutes(self):
         with self.assertRaises(RuntimeError):
             self.run_with(REC, RuntimeError("bug"))
         self.assertEqual(self.mute_calls[-1], True)
 
-    def test_permission_error(self):
-        self.assertEqual(self.run_with(PermissionError()), 1)
+    def test_permission_error_mutes_and_retries(self):
+        self.wait.side_effect = [None, KeyboardInterrupt]
+        self.read.side_effect = [reports(PermissionError()), reports(KeyboardInterrupt)]
+        self.assertEqual(daemon.run(), 0)
+        self.assertEqual(self.read.call_count, 2)
         self.assertEqual(self.mute_calls[-1], True)
 
     def test_does_not_read_if_the_first_mute_fails(self):
@@ -242,23 +290,42 @@ class RunTest(QuietTestCase):
         self.assertEqual(daemon.run(Config(source=other)), 0)
         self.assertEqual(set(self.mute_calls), {other})
 
-    def test_configured_source_must_exist(self):
-        self.assertEqual(daemon.run(Config(source="alsa_input.missing")), 1)
+    def test_waits_for_the_configured_source(self):
+        self.assertEqual(daemon.run(Config(source="alsa_input.missing")), 0)
+        self.wait.assert_called_once()
         self.read.assert_not_called()
 
-    def test_no_device(self):
+    def test_waits_for_the_device(self):
         daemon.find_hid_interfaces.return_value = []
-        self.assertEqual(daemon.run(), 1)
+        self.assertEqual(daemon.run(), 0)
+        self.wait.assert_called_once()
         self.assertEqual(self.mute_calls, [])
 
-    def test_no_source(self):
+    def test_device_appearing_later_is_picked_up(self):
+        daemon.find_hid_interfaces.side_effect = [[], [], [self.interface]]
+        self.wait.side_effect = [None, None, KeyboardInterrupt]
+        self.read.return_value = reports(KeyboardInterrupt)
+        self.assertEqual(daemon.run(), 0)
+        self.read.assert_called_once()
+
+    def test_waits_for_the_source(self):
         daemon.list_sources.return_value = []
-        self.assertEqual(daemon.run(), 1)
+        self.assertEqual(daemon.run(), 0)
+        self.wait.assert_called_once()
         self.read.assert_not_called()
 
-    def test_pactl_failure_on_start(self):
+    def test_waits_for_the_audio_server(self):
         daemon.list_sources.side_effect = AudioError("no server")
-        self.assertEqual(daemon.run(), 1)
+        self.assertEqual(daemon.run(), 0)
+        self.wait.assert_called_once()
+
+    def test_waiting_message_is_logged_once(self):
+        logging.disable(logging.NOTSET)
+        daemon.find_hid_interfaces.return_value = []
+        self.wait.side_effect = [None, None, KeyboardInterrupt]
+        with self.assertLogs("speechmike_ptt.daemon", "INFO") as logs:
+            daemon.run()
+        self.assertEqual(sum("No supported device" in line for line in logs.output), 1)
 
 
 if __name__ == "__main__":

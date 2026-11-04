@@ -36,6 +36,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 6. Optional notifications (`notify-send`, off by default) (done)
 7. systemd user service, udev rule file, `install.sh` with uninstall (done)
 8. Final README, test on a clean system
+9. Dictation with a second button (done)
 
 Out of scope for now: LED control (output report format unknown; goes into the README roadmap),
 testing on plain PulseAudio.
@@ -82,6 +83,8 @@ testing on plain PulseAudio.
 - The USB serial from sysfs appears in the source name. It links a HID device to its source.
 - `pactl set-source-mute <source> 1|0` works.
 - `pactl` output is localized, so always run it with `LC_ALL=C`.
+- The source has `HW_MUTE_CTRL`: the mute sets the ALSA capture switch, not only PipeWire state.
+- Handy's stream shows up as `cpal-pulseaudio-<pid>`, only while it records.
 
 ## udev
 Rule, not filtered by interface because udev cannot reliably combine ATTRS of different parents:

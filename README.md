@@ -71,6 +71,39 @@ notify = false
 In toggle mode the microphone stays open until the next press, so it listens until you close it.
 An invalid setting stops the program with an error message.
 
+## Dictation
+
+A second button can drive a speech-to-text tool such as [Handy](https://github.com/cjpais/Handy),
+which types into the focused window. REC stays pure push-to-talk.
+
+```ini
+[dictation]
+button = F1
+on_press = pkill -USR2 -x handy
+on_release = pkill -USR2 -x handy
+# Keeps the microphone open and recording this long after the button is released,
+# so the last word is not cut off
+release_delay_ms = 400
+# Text in the application name of the tool's audio stream, see `pactl list source-outputs`
+recorder = cpal-pulseaudio
+```
+
+While the button is held the microphone is open and the tool records. After the release and the
+delay, the program stops the tool and mutes the microphone.
+
+`on_press` and `on_release` are commands, not shell lines. Tools like Handy only have a toggle, so a
+stop sent at the wrong moment would start a recording. With `recorder` set, the program checks the
+real audio stream first. It also stops recordings that keep running while the microphone is muted.
+
+Notes for Handy:
+
+- Do not use these signals with the AppImage directly. It runs a helper process that is also called
+  `handy`, and the signal kills it. Use the `.deb` package or run `./Handy.AppImage --appimage-extract`
+  and start `squashfs-root/AppRun`.
+- Select the SpeechMike as input device, and set a paste method. Direct typing mixed up the letters
+  in our tests, `Ctrl+Shift+V` worked in a terminal.
+- Lower the input volume of the SpeechMike if the recordings are clipped.
+
 ## Diagnostic mode
 
 ```sh

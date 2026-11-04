@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from .devices import DeviceProfile
@@ -24,6 +24,7 @@ class AudioError(Exception):
 class Source:
     name: str
     state: str
+    index: str = field(default="", compare=False)
 
 
 def parse_sources(text: str) -> List[Source]:
@@ -32,7 +33,8 @@ def parse_sources(text: str) -> List[Source]:
     for line in text.splitlines():
         fields = line.split("\t")
         if len(fields) >= 2:
-            sources.append(Source(fields[1], fields[4] if len(fields) >= 5 else "unknown"))
+            state = fields[4] if len(fields) >= 5 else "unknown"
+            sources.append(Source(fields[1], state, fields[0]))
     return sources
 
 
@@ -58,6 +60,20 @@ def _pactl(*args: str) -> str:
 
 def list_sources() -> List[Source]:
     return parse_sources(_pactl("list", "short", "sources"))
+
+
+def parse_recording_active(text: str, source_index: str, recorder: str) -> bool:
+    """Tell from `pactl list source-outputs` if a matching stream records the source."""
+    for block in text.split("Source Output #")[1:]:
+        on_source = re.search(rf"^\s*Source: {re.escape(source_index)}\s*$", block, re.MULTILINE)
+        name = re.search(r'^\s*application\.name = "(.*)"\s*$', block, re.MULTILINE)
+        if on_source and name and recorder in name.group(1):
+            return True
+    return False
+
+
+def recording_active(source_index: str, recorder: str) -> bool:
+    return parse_recording_active(_pactl("list", "source-outputs"), source_index, recorder)
 
 
 def get_source_mute(name: str) -> bool:

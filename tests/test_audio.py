@@ -8,6 +8,7 @@ from speechmike_ptt.audio import (
     get_source_mute,
     list_sources,
     mask_serial,
+    parse_recording_active,
     parse_sources,
     select_source,
     set_source_mute,
@@ -32,14 +33,42 @@ def sources(*names):
 
 
 class ParseTest(unittest.TestCase):
-    def test_parses_name_and_state(self):
+    def test_parses_name_state_and_index(self):
         parsed = parse_sources(PACTL_OUTPUT)
         self.assertEqual(len(parsed), 3)
         self.assertEqual(parsed[1], Source(MIC_A, "RUNNING"))
+        self.assertEqual(parsed[1].index, "98")
 
     def test_empty_output_and_junk_lines(self):
         self.assertEqual(parse_sources(""), [])
         self.assertEqual(parse_sources("junk\n"), [])
+
+
+OUTPUTS = """Source Output #2240
+\tDriver: PipeWire
+\tSource: 3281
+\tProperties:
+\t\tapplication.name = "qemu-system-x86_64"
+Source Output #13578
+\tDriver: PipeWire
+\tSource: 3281
+\tProperties:
+\t\tapplication.name = "cpal-pulseaudio-56634"
+"""
+
+
+class RecordingActiveTest(unittest.TestCase):
+    def test_finds_the_stream(self):
+        self.assertTrue(parse_recording_active(OUTPUTS, "3281", "cpal-pulseaudio"))
+
+    def test_other_applications_do_not_count(self):
+        self.assertFalse(parse_recording_active(OUTPUTS, "3281", "handy"))
+
+    def test_other_source_does_not_count(self):
+        self.assertFalse(parse_recording_active(OUTPUTS, "328", "cpal-pulseaudio"))
+
+    def test_no_streams(self):
+        self.assertFalse(parse_recording_active("", "3281", "cpal-pulseaudio"))
 
 
 class SelectSourceTest(unittest.TestCase):

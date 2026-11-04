@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from speechmike_ptt.config import Config, ConfigError, config_path, load_config
+from speechmike_ptt.config import (
+    Config,
+    ConfigError,
+    DictationConfig,
+    config_path,
+    load_config,
+)
 
 
 class LoadConfigTest(unittest.TestCase):
@@ -46,6 +52,59 @@ class LoadConfigTest(unittest.TestCase):
     def test_invalid_notify(self):
         with self.assertRaisesRegex(ConfigError, "notify must be"):
             self.load("[speechmike-ptt]\nnotify = maybe\n")
+
+    DICTATION = (
+        "[dictation]\nbutton = f1\non_press = pkill -USR2 -x handy\n"
+        "on_release = sh -c 'echo a b'\n"
+    )
+
+    def test_no_dictation_by_default(self):
+        self.assertIsNone(self.load("[speechmike-ptt]\n").dictation)
+
+    def test_reads_dictation(self):
+        config = self.load(self.DICTATION + "release_delay_ms = 250\nrecorder = cpal\n")
+        self.assertEqual(
+            config.dictation,
+            DictationConfig(
+                "F1",
+                ("pkill", "-USR2", "-x", "handy"),
+                ("sh", "-c", "echo a b"),
+                250,
+                "cpal",
+            ),
+        )
+
+    def test_dictation_defaults(self):
+        dictation = self.load(self.DICTATION).dictation
+        self.assertEqual(dictation.release_delay_ms, 400)
+        self.assertIsNone(dictation.recorder)
+
+    def test_dictation_needs_its_settings(self):
+        for missing in ("button = F1\non_press = a\n", "on_press = a\non_release = b\n"):
+            with self.assertRaisesRegex(ConfigError, "needs"):
+                self.load("[dictation]\n" + missing)
+
+    def test_dictation_button_must_differ(self):
+        with self.assertRaisesRegex(ConfigError, "must differ"):
+            self.load("[dictation]\nbutton = REC\non_press = a\non_release = b\n")
+        with self.assertRaisesRegex(ConfigError, "must differ"):
+            self.load(
+                "[speechmike-ptt]\nbutton = F1\n"
+                "[dictation]\nbutton = F1\non_press = a\non_release = b\n"
+            )
+
+    def test_invalid_delay(self):
+        for value in ("soon", "-1"):
+            with self.assertRaisesRegex(ConfigError, "release_delay_ms"):
+                self.load(self.DICTATION + f"release_delay_ms = {value}\n")
+
+    def test_invalid_quoting(self):
+        with self.assertRaisesRegex(ConfigError, "invalid on_press"):
+            self.load("[dictation]\nbutton = F1\non_press = 'a\non_release = b\n")
+
+    def test_unknown_dictation_setting(self):
+        with self.assertRaisesRegex(ConfigError, "unknown setting"):
+            self.load(self.DICTATION + "delay = 1\n")
 
     def test_invalid_mode(self):
         with self.assertRaisesRegex(ConfigError, "mode must be"):

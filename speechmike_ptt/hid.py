@@ -7,7 +7,7 @@ import os
 import select
 from dataclasses import dataclass
 from itertools import zip_longest
-from typing import Iterator, List, Optional, Sequence
+from typing import Callable, Iterator, List, Optional, Sequence, Union
 
 from .devices import DEVICES, DeviceProfile
 
@@ -122,11 +122,13 @@ def udev_hint(profile: DeviceProfile) -> str:
     )
 
 
-def read_reports(node: str, timeout: Optional[float] = None) -> Iterator[Optional[bytes]]:
+def read_reports(
+    node: str, timeout: Union[None, float, Callable[[], float]] = None
+) -> Iterator[Optional[bytes]]:
     """Yield reports from a hidraw node until the device goes away.
 
-    With a timeout in seconds, yields None whenever that time passes without a
-    report. Raises PermissionError if the node cannot be opened and DeviceGone once
+    With a timeout in seconds, or a function that returns one, yields None
+    whenever that time passes without a report. Raises PermissionError if the node cannot be opened and DeviceGone once
     the device disappears.
     """
     try:
@@ -135,7 +137,8 @@ def read_reports(node: str, timeout: Optional[float] = None) -> Iterator[Optiona
         raise DeviceGone(node) from exc
     try:
         while True:
-            if timeout is not None and not select.select([fd], [], [], timeout)[0]:
+            wait = timeout() if callable(timeout) else timeout
+            if wait is not None and not select.select([fd], [], [], wait)[0]:
                 yield None
                 continue
             try:

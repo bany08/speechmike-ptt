@@ -8,6 +8,7 @@ RULE=70-speechmike.rules
 RULE_PATH=/etc/udev/rules.d/$RULE
 DATA_DIR=$HOME/.local/share/speechmike-ptt
 UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+AUTOSTART=${XDG_CONFIG_HOME:-$HOME/.config}/autostart/speechmike-ptt-tray.desktop
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 require() {
@@ -30,6 +31,8 @@ install_all() {
     echo "Installing the program to $DATA_DIR"
     mkdir -p "$DATA_DIR/speechmike_ptt"
     cp "$SOURCE_DIR"/speechmike_ptt/*.py "$DATA_DIR/speechmike_ptt/"
+    mkdir -p "$DATA_DIR/speechmike_ptt/icons"
+    cp "$SOURCE_DIR"/speechmike_ptt/icons/*.svg "$DATA_DIR/speechmike_ptt/icons/"
 
     echo "Installing the service to $UNIT_DIR"
     mkdir -p "$UNIT_DIR"
@@ -38,6 +41,14 @@ install_all() {
     echo "Installing the udev rule to $RULE_PATH (needs sudo)"
     sudo install -m 0644 "$SOURCE_DIR/packaging/$RULE" "$RULE_PATH"
     reload_udev
+
+    if python3 -c "import gi; gi.require_version('AyatanaAppIndicator3', '0.1')" 2>/dev/null; then
+        echo "Adding the status icon to your autostart"
+        mkdir -p "$(dirname "$AUTOSTART")"
+        sed "s|@DATA_DIR@|$DATA_DIR|" "$SOURCE_DIR/packaging/speechmike-ptt-tray.desktop" >"$AUTOSTART"
+    else
+        echo "Skipping the status icon: PyGObject or AyatanaAppIndicator3 is missing"
+    fi
 
     systemctl --user daemon-reload
     systemctl --user enable "$SERVICE"
@@ -54,7 +65,7 @@ uninstall_all() {
 
     echo "Stopping and removing the service"
     systemctl --user disable --now "$SERVICE" 2>/dev/null || true
-    rm -f "$UNIT_DIR/$SERVICE"
+    rm -f "$UNIT_DIR/$SERVICE" "$AUTOSTART"
     systemctl --user daemon-reload
 
     echo "Removing $DATA_DIR"

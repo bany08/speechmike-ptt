@@ -3,7 +3,8 @@
 Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project (GitHub, MIT).
 
 ## Rules
-- Python 3.9+, standard library only, no external dependencies.
+- Python 3.9+, standard library only, no external dependencies. The only exception is the optional
+  status icon (`tray.py`, PyGObject). It shows state only and the daemon must never depend on it.
 - Code, comments and README in English. Talk to the owner in German.
 - Work in small testable steps and say how to test each one.
 - This repo is public. Never commit anything that identifies the owner or their hardware: serial
@@ -24,6 +25,8 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 - `speechmike_ptt/daemon.py`: push-to-talk logic and main loop, muted on every exit path.
 - `speechmike_ptt/config.py`: config file. Invalid settings are errors, never silent fallbacks.
 - `speechmike_ptt/notify.py`: optional notifications. Must never block or break the switching.
+- `speechmike_ptt/status.py`: state file in `$XDG_RUNTIME_DIR`, written by the daemon for the icon.
+- `speechmike_ptt/tray.py`: optional status icon, `--tray`. Imports `gi` only on demand.
 - `speechmike_ptt/cli.py`: argument parsing and the `--debug` mode.
 - `packaging/`: udev rule and systemd user unit, installed by `install.sh`.
 

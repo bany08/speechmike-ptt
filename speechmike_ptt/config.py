@@ -29,6 +29,8 @@ class DictationConfig:
     on_release: Tuple[str, ...]
     release_delay_ms: int = DEFAULT_RELEASE_DELAY_MS
     recorder: Optional[str] = None  # text in the application name of the tool's audio stream
+    tool_start: Optional[Tuple[str, ...]] = None  # lets the status icon start the tool
+    tool_process: Optional[str] = None  # process name the status icon looks for
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,15 @@ def _load_dictation(path: str, parser: configparser.ConfigParser) -> Optional[Di
     if not parser.has_section(DICTATION_SECTION):
         return None
     values = dict(parser[DICTATION_SECTION])
-    known = {"button", "on_press", "on_release", "release_delay_ms", "recorder"}
+    known = {
+        "button",
+        "on_press",
+        "on_release",
+        "release_delay_ms",
+        "recorder",
+        "tool_start",
+        "tool_process",
+    }
     unknown_keys = set(values) - known
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
@@ -81,6 +91,8 @@ def _load_dictation(path: str, parser: configparser.ConfigParser) -> Optional[Di
         on_release=_command(path, values, "on_release"),
         release_delay_ms=delay,
         recorder=values.get("recorder") or None,
+        tool_start=_command(path, values, "tool_start") if values.get("tool_start") else None,
+        tool_process=values.get("tool_process") or None,
     )
 
 

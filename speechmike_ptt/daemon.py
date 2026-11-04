@@ -22,6 +22,7 @@ from .config import Config, ConfigError, DictationConfig
 from .devices import DeviceProfile
 from .hid import DeviceGone, HidInterface, find_hid_interfaces, read_reports, udev_hint
 from .notify import Notifier
+from .status import StatusFile
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ class Dictation:
         self.active = False  # from the start until the stop action, including the delay
         self.stop_at: Optional[float] = None
         self.was_held = False
+        self.failed_starts = 0
 
     def _recording(self) -> bool:
         if self.is_recording is None:
@@ -124,6 +126,8 @@ class Dictation:
         elif run_action(self.config.on_press):
             self.active = True
             log.info("Dictation started")
+        else:
+            self.failed_starts += 1
 
     def poll(self) -> None:
         if self.stop_at is not None and self.clock() >= self.stop_at:
@@ -172,6 +176,7 @@ class PushToTalk:
         on_change: Optional[Callable[[bool], None]] = None,
         is_muted: Optional[Callable[[], bool]] = None,
         dictation: Optional[Dictation] = None,
+        on_state: Optional[Callable[[bool, bool], None]] = None,
     ) -> None:
         self.profile = profile
         self.button = button
@@ -182,6 +187,7 @@ class PushToTalk:
         self.is_muted = is_muted
         self.check_failing = False
         self.dictation = dictation
+        self.on_state = on_state or (lambda is_open, dictating: None)
         self.is_open = False
         self.talking = False
         self.was_held = False
@@ -197,18 +203,24 @@ class PushToTalk:
 
         if self.dictation is None:
             self._apply()
+            self._publish()
             return
         dictation_held = self.dictation.config.button in pressed
         # The microphone must be open before the tool starts to record.
         self._apply(dictation_held and not self.dictation.was_held)
         self.dictation.update(dictation_held)
         self._apply()
+        self._publish()
 
     def poll(self) -> None:
         """Handle timers. Call this after every report and timeout."""
         if self.dictation is not None:
             self.dictation.poll()
             self._apply()
+            self._publish()
+
+    def _publish(self) -> None:
+        self.on_state(self.is_open, self.dictation is not None and self.dictation.active)
 
     def next_timeout(self) -> float:
         wait = self.dictation.seconds_until_stop() if self.dictation else None
@@ -309,6 +321,7 @@ def run_session(
     source: Source,
     config: Config,
     notifier: Optional[Notifier] = None,
+    status: Optional[StatusFile] = None,
 ) -> None:
     """Serve one connected device until it goes away. Always ends muted."""
 
@@ -322,6 +335,8 @@ def run_session(
             return True  # unknown, so assume the worst
 
     mute(set_mute, source_exists)
+    status = status or StatusFile(None)
+    status.update(device=True, mic="muted", dictating=False)
     log.info("Using %s and %s", target.node, mask_serial(source.name, target.serial))
     action = "Hold" if config.mode == "hold" else "Press"
     log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
@@ -342,6 +357,11 @@ def run_session(
         notifier,
         lambda: get_source_mute(source.name),
         dictation,
+        lambda is_open, dictating: status.update(
+            mic="open" if is_open else "muted",
+            dictating=dictating,
+            failed_starts=dictation.failed_starts if dictation else 0,
+        ),
     )
     try:
         for report in read_reports(target.node, ptt.next_timeout):
@@ -376,6 +396,8 @@ def run(config: Config = Config()) -> int:
     """Serve the device across reconnects until interrupted. Returns the exit code."""
     last_message = None
     notifier = Notifier() if config.notify else None
+    status = StatusFile()
+    status.update()
 
     def report_once(message: str, level: int = logging.INFO) -> None:
         nonlocal last_message
@@ -387,13 +409,15 @@ def run(config: Config = Config()) -> int:
         while True:
             try:
                 target, source = find_target(config)
-                run_session(target, source, config, notifier)
+                run_session(target, source, config, notifier, status)
             except NotReady as exc:
+                status.update(device=False, mic="muted", dictating=False)
                 report_once(f"{exc} Waiting.")
             except PermissionError:
                 # Also happens briefly after replugging, until udev has set the ACL.
                 report_once(udev_hint(target.profile), logging.ERROR)
             except DeviceGone:
+                status.update(device=False, mic="muted", dictating=False)
                 log.info("Device disconnected. Waiting.")
                 last_message = None
             wait_for_device()
@@ -407,5 +431,6 @@ def run(config: Config = Config()) -> int:
         log.error("Exiting because of an audio error: %s", exc)
         return 1
     finally:
+        status.clear()
         if notifier is not None:
             notifier.flush(NOTIFY_FLUSH_SECONDS)

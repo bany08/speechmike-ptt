@@ -125,6 +125,28 @@ Notes for Handy:
 - Handy keeps recordings and a history of the text on disk. Check its settings before you dictate
   anything confidential.
 
+## Status icon
+
+`./install.sh` adds a status icon next to the clock if PyGObject and AyatanaAppIndicator3 are
+installed. It starts with your next login, or right away with:
+
+```sh
+PYTHONPATH=~/.local/share/speechmike-ptt python3 -m speechmike_ptt --tray
+```
+
+Grey means muted, red means open, red with a blue dot means dictating, and a yellow dot means the
+service or the device is missing. The icon only shows the state, so the microphone does not depend
+on it. This is the only part of the program that needs a library outside the standard library.
+
+To start your dictation tool from the icon menu, add this to `[dictation]`. The icon then also
+starts the tool when the dictation button is pressed while the tool is not running. That dictation
+is lost, the tool needs a few seconds to get ready.
+
+```ini
+tool_start = handy --start-hidden
+tool_process = handy
+```
+
 ## Diagnostic mode
 
 ```sh
@@ -156,7 +178,7 @@ Contributions for other SpeechMike models are welcome. Only add what you observe
 
 ## Roadmap
 
-- Control the LEDs of the device, for example to show that the microphone is open. The device has
+- Show the microphone state on the device itself: control its LEDs, for example to show that the microphone is open. The device has
   output reports, but their format is unknown.
 - Support for more SpeechMike models.
 - Test the udev rule on a clean system.

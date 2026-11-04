@@ -123,8 +123,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="show detected devices and print button reports (read-only)",
     )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="show a status icon (needs PyGObject and AyatanaAppIndicator3)",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
+
+    if args.tray:
+        from . import tray
+
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        return tray.main()
 
     sys.stdout.reconfigure(line_buffering=True)
     logging.basicConfig(level=logging.INFO, format="%(message)s")

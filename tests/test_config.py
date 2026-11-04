@@ -74,6 +74,11 @@ class LoadConfigTest(unittest.TestCase):
             ),
         )
 
+    def test_reads_tool_settings(self):
+        config = self.load(self.DICTATION + "tool_start = handy --start-hidden\ntool_process = handy\n")
+        self.assertEqual(config.dictation.tool_start, ("handy", "--start-hidden"))
+        self.assertEqual(config.dictation.tool_process, "handy")
+
     def test_dictation_defaults(self):
         dictation = self.load(self.DICTATION).dictation
         self.assertEqual(dictation.release_delay_ms, 400)

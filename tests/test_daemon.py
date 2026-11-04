@@ -288,6 +288,15 @@ class DictationTest(QuietTestCase):
         self.feed(F1, F1, F1)
         self.assertEqual(self.fake.calls, [False, True])
 
+    def test_failed_start_is_counted(self):
+        self.tool.fails = True
+        self.feed(F1, IDLE, F1)
+        self.assertEqual(self.dictation.failed_starts, 2)
+
+    def test_successful_start_is_not_counted(self):
+        self.feed(F1)
+        self.assertEqual(self.dictation.failed_starts, 0)
+
     def test_failed_stop_still_mutes(self):
         self.feed(F1, IDLE)
         self.tool.fails = True
@@ -438,6 +447,7 @@ class RunTest(QuietTestCase):
             if muted and self.fail_mute:
                 raise AudioError("mute failed")
 
+        self.status = self.patch("StatusFile").return_value
         self.patch("find_hid_interfaces", return_value=[self.interface])
         self.patch("list_sources", return_value=[Source(SOURCE, "SUSPENDED")])
         self.patch("set_source_mute", side_effect=set_source_mute)
@@ -609,6 +619,28 @@ class RunTest(QuietTestCase):
         config = Config(dictation=DictationConfig("NOPE", ("a",), ("b",)))
         self.assertEqual(daemon.run(config), 1)
         self.read.assert_not_called()
+
+    def test_publishes_the_microphone_state(self):
+        self.run_with(REC, IDLE, KeyboardInterrupt)
+        states = [call.kwargs.get("mic") for call in self.status.update.call_args_list]
+        self.assertEqual([s for s in states if s], ["muted", "open", "muted"])
+
+    def test_publishes_failed_dictation_starts(self):
+        config = Config(dictation=DictationConfig("F1", ("start",), ("stop",)))
+        with mock.patch("speechmike_ptt.daemon.run_action", return_value=False):
+            self.read.return_value = reports(F1, KeyboardInterrupt)
+            daemon.run(config)
+        counts = [call.kwargs.get("failed_starts") for call in self.status.update.call_args_list]
+        self.assertIn(1, counts)
+
+    def test_publishes_a_missing_device(self):
+        daemon.find_hid_interfaces.return_value = []
+        daemon.run()
+        self.assertEqual(self.status.update.call_args.kwargs["device"], False)
+
+    def test_clears_the_status_on_exit(self):
+        self.run_with(KeyboardInterrupt)
+        self.status.clear.assert_called_once()
 
     def test_idle_timeout_checks_the_mute_state(self):
         self.get_mute.return_value = False

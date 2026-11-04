@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=SpeechMike status
+Comment=Status icon for speechmike-ptt
+Exec=env PYTHONPATH=@DATA_DIR@ python3 -m speechmike_ptt --tray
+X-GNOME-Autostart-enabled=true
+Terminal=false

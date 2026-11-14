@@ -100,6 +100,7 @@ rec = dictate
 f1 = talk
 f2 = repeat BackSpace
 f3 = send
+eol_prio = double End Home
 ```
 
 | Function | What it does |
@@ -109,6 +110,7 @@ f3 = send
 | `send` | Presses Enter. Set `send_command` in `[speechmike-ptt]` to change the key. |
 | `key <name>` | Presses a key, by its xdotool name: `BackSpace`, `Escape`, `ctrl+z` and so on. |
 | `repeat <name>` | Like `key`, but repeats while the button is held, like a keyboard. |
+| `double <name> <name>` | Presses the first key at once. A quick second press sends the second key. |
 | `none` | Does nothing. |
 
 Only one button can `talk` and one can `dictate`. Button names are the ones from the device table:
@@ -118,7 +120,11 @@ Only one button can `talk` and one can `dictate`. Button names are the ones from
 A repeating key starts after `repeat_delay_ms` (default 500) and then repeats every
 `repeat_interval_ms` (default 40). Both can be set in `[speechmike-ptt]`.
 
-`send`, `key` and `repeat` use `xdotool` and need X11. The service takes the display from the systemd user
+With `double`, the first press never waits for a second one, so it reacts at once. A second press
+within `double_click_ms` (default 400) sends the second key instead. For `double End Home` that
+means the cursor goes to the end of the line and then to its start.
+
+`send`, `key`, `repeat` and `double` use `xdotool` and need X11. The service takes the display from the systemd user
 manager, because it often starts before the desktop is up.
 
 `talk` does not control an app. The voice mode of the Claude desktop app, for example, only listens

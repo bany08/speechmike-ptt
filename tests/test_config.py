@@ -166,6 +166,14 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(dict(config.key_buttons)["F2"][-1], "BackSpace")
         self.assertEqual((config.repeat_delay_ms, config.repeat_interval_ms), (500, 40))
 
+    def test_double_function(self):
+        config = self.load("[buttons]\neol_prio = double End Home\n")
+        self.assertEqual(dict(config.key_buttons)["EOL_PRIO"][-1], "End")
+        self.assertEqual(dict(config.double_buttons)["EOL_PRIO"][-1], "Home")
+        self.assertEqual(config.double_click_ms, 400)
+        with self.assertRaises(ConfigError):
+            self.load("[buttons]\neol_prio = double End\n")
+
     def test_repeat_timing(self):
         config = self.load("[speechmike-ptt]\nrepeat_delay_ms = 300\nrepeat_interval_ms = 25\n")
         self.assertEqual((config.repeat_delay_ms, config.repeat_interval_ms), (300, 25))

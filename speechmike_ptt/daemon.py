@@ -219,6 +219,8 @@ class PushToTalk:
         repeat_delay: float = 0.5,
         repeat_interval: float = 0.04,
         clock: Callable[[], float] = time.monotonic,
+        double_buttons: Sequence[str] = (),
+        double_window: float = 0.4,
     ) -> None:
         self.profile = profile
         self.button = button
@@ -238,6 +240,9 @@ class PushToTalk:
         self.repeat_interval = repeat_interval
         self.clock = clock
         self.repeat_at: Dict[str, float] = {}  # held repeating key -> time of the next press
+        self.double_buttons = set(double_buttons)
+        self.double_window = double_window
+        self.first_press_at: Dict[str, float] = {}
         self.is_open = False
         self.talking = False
         self.was_held = False
@@ -266,12 +271,25 @@ class PushToTalk:
     def _handle_keys(self, pressed: Sequence[str]) -> None:
         held = {name for name in self.key_buttons if name in pressed}
         for name in sorted(held - self.keys_held):
+            if name in self.double_buttons:
+                self._press_double(name)
+                continue
             self.on_key(name)
             if name in self.repeat_buttons:
                 self.repeat_at[name] = self.clock() + self.repeat_delay
         for name in self.keys_held - held:
             self.repeat_at.pop(name, None)
         self.keys_held = held
+
+    def _press_double(self, name: str) -> None:
+        """The first press acts at once. A quick second press sends the second key."""
+        now = self.clock()
+        first = self.first_press_at.pop(name, None)
+        if first is not None and now - first <= self.double_window:
+            self.on_key(name + ":double")
+        else:
+            self.on_key(name)
+            self.first_press_at[name] = now
 
     def _repeat_keys(self) -> None:
         now = self.clock()
@@ -424,9 +442,12 @@ def run_session(
         action = "Hold" if config.mode == "hold" else "Press"
         log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
     key_commands = dict(config.key_buttons)
+    key_commands.update((name + ":double", command) for name, command in config.double_buttons)
     for name, command in config.key_buttons:
         repeats = " (repeats while held)" if name in config.repeat_buttons else ""
-        log.info("Press %s for key %s%s.", name, command[-1], repeats)
+        double = dict(config.double_buttons).get(name)
+        twice = f", twice for {double[-1]}" if double else ""
+        log.info("Press %s for key %s%s%s.", name, command[-1], repeats, twice)
 
     def press_key(name: str) -> None:
         if run_action(key_commands[name], display_env()):
@@ -453,11 +474,14 @@ def run_session(
             dictating=dictating,
             failed_starts=dictation.failed_starts if dictation else 0,
         ),
-        tuple(key_commands),
+        tuple(name for name, _command in config.key_buttons),
         press_key,
         config.repeat_buttons,
         config.repeat_delay_ms / 1000,
         config.repeat_interval_ms / 1000,
+        time.monotonic,
+        tuple(name for name, _command in config.double_buttons),
+        config.double_click_ms / 1000,
     )
     last_check = float("-inf")
     try:

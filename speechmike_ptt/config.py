@@ -19,7 +19,8 @@ log = logging.getLogger(__name__)
 SECTION = "speechmike-ptt"
 DICTATION_SECTION = "dictation"
 BUTTONS_SECTION = "buttons"
-FUNCTIONS = ("talk", "dictate", "send", "key <name>", "repeat <name>", "none")
+FUNCTIONS = ("talk", "dictate", "send", "key <name>", "repeat <name>", "double <name> <name>", "none")
+DEFAULT_DOUBLE_CLICK_MS = 400
 DEFAULT_REPEAT_DELAY_MS = 500
 DEFAULT_REPEAT_INTERVAL_MS = 40
 DEFAULT_SEND_COMMAND = ("xdotool", "key", "--clearmodifiers", "Return")
@@ -52,6 +53,8 @@ class Config:
     dictation: Optional[DictationConfig] = None
     key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()  # button and the command it runs
     repeat_buttons: Tuple[str, ...] = ()  # key buttons that repeat while held
+    double_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()  # command for a quick second press
+    double_click_ms: int = DEFAULT_DOUBLE_CLICK_MS
     repeat_delay_ms: int = DEFAULT_REPEAT_DELAY_MS
     repeat_interval_ms: int = DEFAULT_REPEAT_INTERVAL_MS
     send_command: Tuple[str, ...] = DEFAULT_SEND_COMMAND
@@ -91,6 +94,11 @@ def _load_buttons(path: str, parser: configparser.ConfigParser) -> Optional[Dict
     buttons = {}
     for name, function in parser[BUTTONS_SECTION].items():
         words = function.split()
+        if len(words) == 3 and words[0].lower() == "double":
+            if not (KEY_NAME.match(words[1]) and KEY_NAME.match(words[2])):
+                raise ConfigError(f"{path}: {name} = {function!r}, invalid key name")
+            buttons[name.upper()] = f"double {words[1]} {words[2]}"
+            continue
         if len(words) == 2 and words[0].lower() in ("key", "repeat"):
             if not KEY_NAME.match(words[1]):
                 raise ConfigError(f"{path}: {name} = {function!r}, invalid key name")
@@ -171,6 +179,7 @@ def load_config(path: Optional[str] = None) -> Config:
         "send_command",
         "repeat_delay_ms",
         "repeat_interval_ms",
+        "double_click_ms",
     }
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
@@ -191,6 +200,8 @@ def load_config(path: Optional[str] = None) -> Config:
     )
     key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
     repeat_buttons: Tuple[str, ...] = ()
+    double_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    double_click = _milliseconds(path, values, "double_click_ms", DEFAULT_DOUBLE_CLICK_MS)
     repeat_delay = _milliseconds(path, values, "repeat_delay_ms", DEFAULT_REPEAT_DELAY_MS)
     repeat_interval = _milliseconds(path, values, "repeat_interval_ms", DEFAULT_REPEAT_INTERVAL_MS)
     if repeat_interval < 10:
@@ -212,13 +223,19 @@ def load_config(path: Optional[str] = None) -> Config:
         button = talk[0] if talk else None
         dictation = replace(dictation, button=dictate[0]) if dictate else None
         keys = []
+        doubles = []
         for name, value in buttons.items():
-            if value == "send":
+            if value.startswith("double "):
+                _, first, second = value.split(" ")
+                keys.append((name, ("xdotool", "key", "--clearmodifiers", first)))
+                doubles.append((name, ("xdotool", "key", "--clearmodifiers", second)))
+            elif value == "send":
                 keys.append((name, send_command))
             elif value.startswith(("key ", "repeat ")):
                 key = value.split(" ", 1)[1]
                 keys.append((name, ("xdotool", "key", "--clearmodifiers", key)))
         key_buttons = tuple(keys)
+        double_buttons = tuple(doubles)
         repeat_buttons = tuple(name for name, value in buttons.items() if value.startswith("repeat "))
     return Config(
         mode=mode,
@@ -228,6 +245,8 @@ def load_config(path: Optional[str] = None) -> Config:
         dictation=dictation,
         key_buttons=key_buttons,
         repeat_buttons=repeat_buttons,
+        double_buttons=double_buttons,
+        double_click_ms=double_click,
         repeat_delay_ms=repeat_delay,
         repeat_interval_ms=repeat_interval,
         send_command=send_command,

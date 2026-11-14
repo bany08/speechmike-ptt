@@ -473,6 +473,53 @@ class RepeatTest(QuietTestCase):
         self.assertAlmostEqual(self.ptt.next_timeout(), 0.5)
 
 
+EOL = bytes.fromhex("80000000842a000020")
+
+
+class DoubleClickTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.now = 10.0
+        self.keys = []
+        self.ptt = PushToTalk(
+            PROFILE,
+            "REC",
+            FakeMute(),
+            key_buttons=("EOL_PRIO",),
+            on_key=self.keys.append,
+            clock=lambda: self.now,
+            double_buttons=("EOL_PRIO",),
+            double_window=0.4,
+        )
+
+    def click(self, after):
+        self.now += after
+        self.ptt.handle_report(EOL)
+        self.ptt.handle_report(EOL)  # every report arrives twice
+        self.now += 0.05
+        self.ptt.handle_report(IDLE)
+
+    def test_single_click_acts_at_once(self):
+        self.click(0)
+        self.assertEqual(self.keys, ["EOL_PRIO"])
+
+    def test_quick_second_click_sends_the_second_key(self):
+        self.click(0)
+        self.click(0.2)
+        self.assertEqual(self.keys, ["EOL_PRIO", "EOL_PRIO:double"])
+
+    def test_slow_second_click_is_a_new_single_click(self):
+        self.click(0)
+        self.click(0.6)
+        self.assertEqual(self.keys, ["EOL_PRIO", "EOL_PRIO"])
+
+    def test_third_quick_click_starts_over(self):
+        self.click(0)
+        self.click(0.1)
+        self.click(0.1)
+        self.assertEqual(self.keys, ["EOL_PRIO", "EOL_PRIO:double", "EOL_PRIO"])
+
+
 class ButtonMappingTest(QuietTestCase):
     def test_no_talk_button_never_opens(self):
         fake = FakeMute()
@@ -754,6 +801,18 @@ class RunTest(QuietTestCase):
             self.read.return_value = reports(F3, KeyboardInterrupt)
             daemon.run(config)
         self.assertEqual(action.call_args.args[0][-1], "Return")
+
+    def test_double_button_runs_both_commands(self):
+        config = Config(
+            key_buttons=(("EOL_PRIO", ("xdotool", "key", "End")),),
+            double_buttons=(("EOL_PRIO", ("xdotool", "key", "Home")),),
+        )
+        with mock.patch("speechmike_ptt.daemon.run_action", return_value=True) as action, mock.patch(
+            "speechmike_ptt.daemon.display_env", return_value=None
+        ):
+            self.read.return_value = reports(EOL, IDLE, EOL, KeyboardInterrupt)
+            daemon.run(config)
+        self.assertEqual([call.args[0][-1] for call in action.call_args_list], ["End", "Home"])
 
     def test_unknown_send_button(self):
         self.assertEqual(daemon.run(Config(key_buttons=(("NOPE", ("x",)),))), 1)

@@ -32,6 +32,7 @@ MUTE_RETRY_DELAY_SECONDS = 0.2
 DEVICE_POLL_SECONDS = 1.0
 NOTIFY_FLUSH_SECONDS = 1.0
 MUTE_CHECK_SECONDS = 2.0
+CHECK_TOLERANCE_SECONDS = 0.05
 ACTION_TIMEOUT_SECONDS = 2
 
 SetMute = Callable[[bool], None]
@@ -214,6 +215,10 @@ class PushToTalk:
         on_state: Optional[Callable[[bool, bool], None]] = None,
         key_buttons: Sequence[str] = (),
         on_key: Optional[Callable[[str], None]] = None,
+        repeat_buttons: Sequence[str] = (),
+        repeat_delay: float = 0.5,
+        repeat_interval: float = 0.04,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
         self.button = button
@@ -228,6 +233,11 @@ class PushToTalk:
         self.key_buttons = tuple(key_buttons)
         self.on_key = on_key or (lambda name: None)
         self.keys_held: set = set()
+        self.repeat_buttons = set(repeat_buttons)
+        self.repeat_delay = repeat_delay
+        self.repeat_interval = repeat_interval
+        self.clock = clock
+        self.repeat_at: Dict[str, float] = {}  # held repeating key -> time of the next press
         self.is_open = False
         self.talking = False
         self.was_held = False
@@ -257,10 +267,23 @@ class PushToTalk:
         held = {name for name in self.key_buttons if name in pressed}
         for name in sorted(held - self.keys_held):
             self.on_key(name)
+            if name in self.repeat_buttons:
+                self.repeat_at[name] = self.clock() + self.repeat_delay
+        for name in self.keys_held - held:
+            self.repeat_at.pop(name, None)
         self.keys_held = held
+
+    def _repeat_keys(self) -> None:
+        now = self.clock()
+        for name, due in list(self.repeat_at.items()):
+            if now >= due:
+                self.on_key(name)
+                # Schedule from now, so a slow command cannot cause a burst.
+                self.repeat_at[name] = self.clock() + self.repeat_interval
 
     def poll(self) -> None:
         """Handle timers. Call this after every report and timeout."""
+        self._repeat_keys()
         if self.dictation is not None:
             self.dictation.poll()
             self._apply()
@@ -270,8 +293,13 @@ class PushToTalk:
         self.on_state(self.is_open, self.dictation is not None and self.dictation.active)
 
     def next_timeout(self) -> float:
-        wait = self.dictation.seconds_until_stop() if self.dictation else None
-        return MUTE_CHECK_SECONDS if wait is None else min(wait, MUTE_CHECK_SECONDS)
+        waits = [MUTE_CHECK_SECONDS]
+        stop = self.dictation.seconds_until_stop() if self.dictation else None
+        if stop is not None:
+            waits.append(stop)
+        if self.repeat_at:
+            waits.append(max(0.0, min(self.repeat_at.values()) - self.clock()))
+        return min(waits)
 
     def shutdown(self) -> None:
         """Stop a running dictation before the microphone gets muted."""
@@ -397,7 +425,8 @@ def run_session(
         log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
     key_commands = dict(config.key_buttons)
     for name, command in config.key_buttons:
-        log.info("Press %s for key %s.", name, command[-1])
+        repeats = " (repeats while held)" if name in config.repeat_buttons else ""
+        log.info("Press %s for key %s%s.", name, command[-1], repeats)
 
     def press_key(name: str) -> None:
         if run_action(key_commands[name], display_env()):
@@ -426,14 +455,22 @@ def run_session(
         ),
         tuple(key_commands),
         press_key,
+        config.repeat_buttons,
+        config.repeat_delay_ms / 1000,
+        config.repeat_interval_ms / 1000,
     )
+    last_check = float("-inf")
     try:
         for report in read_reports(target.node, ptt.next_timeout):
             if report is None:
-                ptt.enforce_mute()
-                changed = watcher.poll() if watcher else None
-                if changed is not None:
-                    raise ConfigChanged(changed)
+                # Timers fire often while a key repeats. Check the rest at the usual pace.
+                now = time.monotonic()
+                if now - last_check >= MUTE_CHECK_SECONDS - CHECK_TOLERANCE_SECONDS:
+                    last_check = now
+                    ptt.enforce_mute()
+                    changed = watcher.poll() if watcher else None
+                    if changed is not None:
+                        raise ConfigChanged(changed)
             else:
                 ptt.handle_report(report)
             ptt.poll()

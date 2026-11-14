@@ -19,7 +19,9 @@ log = logging.getLogger(__name__)
 SECTION = "speechmike-ptt"
 DICTATION_SECTION = "dictation"
 BUTTONS_SECTION = "buttons"
-FUNCTIONS = ("talk", "dictate", "send", "key <name>", "none")
+FUNCTIONS = ("talk", "dictate", "send", "key <name>", "repeat <name>", "none")
+DEFAULT_REPEAT_DELAY_MS = 500
+DEFAULT_REPEAT_INTERVAL_MS = 40
 DEFAULT_SEND_COMMAND = ("xdotool", "key", "--clearmodifiers", "Return")
 KEY_NAME = re.compile(r"^[A-Za-z0-9_+]+$")  # an xdotool key name such as BackSpace or ctrl+z
 MODES = ("hold", "toggle")
@@ -49,6 +51,9 @@ class Config:
     notify: bool = False  # desktop notification on every switch
     dictation: Optional[DictationConfig] = None
     key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()  # button and the command it runs
+    repeat_buttons: Tuple[str, ...] = ()  # key buttons that repeat while held
+    repeat_delay_ms: int = DEFAULT_REPEAT_DELAY_MS
+    repeat_interval_ms: int = DEFAULT_REPEAT_INTERVAL_MS
     send_command: Tuple[str, ...] = DEFAULT_SEND_COMMAND
 
 
@@ -70,19 +75,29 @@ def _command(path: str, values: dict, key: str) -> Tuple[str, ...]:
     return command
 
 
+def _milliseconds(path: str, values: dict, key: str, default: int) -> int:
+    try:
+        value = int(values.get(key, default))
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {key} must be a number") from exc
+    if value < 0:
+        raise ConfigError(f"{path}: {key} must not be negative")
+    return value
+
+
 def _load_buttons(path: str, parser: configparser.ConfigParser) -> Optional[Dict[str, str]]:
     if not parser.has_section(BUTTONS_SECTION):
         return None
     buttons = {}
     for name, function in parser[BUTTONS_SECTION].items():
         words = function.split()
-        if len(words) == 2 and words[0].lower() == "key":
+        if len(words) == 2 and words[0].lower() in ("key", "repeat"):
             if not KEY_NAME.match(words[1]):
                 raise ConfigError(f"{path}: {name} = {function!r}, invalid key name")
-            buttons[name.upper()] = f"key {words[1]}"
+            buttons[name.upper()] = f"{words[0].lower()} {words[1]}"
             continue
         function = function.lower()
-        if function not in FUNCTIONS or function == "key <name>":
+        if function not in FUNCTIONS or "<" in function:
             raise ConfigError(
                 f"{path}: {name} = {function!r}, must be one of {', '.join(FUNCTIONS)}"
             )
@@ -148,7 +163,15 @@ def load_config(path: Optional[str] = None) -> Config:
     dictation = _load_dictation(path, parser)
     buttons = _load_buttons(path, parser)
     values = dict(parser[SECTION]) if parser.has_section(SECTION) else {}
-    unknown_keys = set(values) - {"mode", "button", "source", "notify", "send_command"}
+    unknown_keys = set(values) - {
+        "mode",
+        "button",
+        "source",
+        "notify",
+        "send_command",
+        "repeat_delay_ms",
+        "repeat_interval_ms",
+    }
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
 
@@ -167,6 +190,11 @@ def load_config(path: Optional[str] = None) -> Config:
         _command(path, values, "send_command") if values.get("send_command") else DEFAULT_SEND_COMMAND
     )
     key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    repeat_buttons: Tuple[str, ...] = ()
+    repeat_delay = _milliseconds(path, values, "repeat_delay_ms", DEFAULT_REPEAT_DELAY_MS)
+    repeat_interval = _milliseconds(path, values, "repeat_interval_ms", DEFAULT_REPEAT_INTERVAL_MS)
+    if repeat_interval < 10:
+        raise ConfigError(f"{path}: repeat_interval_ms must be at least 10")
     if buttons is None:
         if dictation is not None and dictation.button == button:
             raise ConfigError(f"{path}: the dictation button must differ from button")
@@ -187,9 +215,11 @@ def load_config(path: Optional[str] = None) -> Config:
         for name, value in buttons.items():
             if value == "send":
                 keys.append((name, send_command))
-            elif value.startswith("key "):
-                keys.append((name, ("xdotool", "key", "--clearmodifiers", value[4:])))
+            elif value.startswith(("key ", "repeat ")):
+                key = value.split(" ", 1)[1]
+                keys.append((name, ("xdotool", "key", "--clearmodifiers", key)))
         key_buttons = tuple(keys)
+        repeat_buttons = tuple(name for name, value in buttons.items() if value.startswith("repeat "))
     return Config(
         mode=mode,
         button=button,
@@ -197,6 +227,9 @@ def load_config(path: Optional[str] = None) -> Config:
         notify=notify,
         dictation=dictation,
         key_buttons=key_buttons,
+        repeat_buttons=repeat_buttons,
+        repeat_delay_ms=repeat_delay,
+        repeat_interval_ms=repeat_interval,
         send_command=send_command,
     )
 

@@ -413,6 +413,66 @@ class SendTest(QuietTestCase):
         self.assertTrue(self.ptt.is_open)
 
 
+F2 = bytes.fromhex("80000000842a000400")
+
+
+class RepeatTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.now = 10.0
+        self.keys = []
+        self.ptt = PushToTalk(
+            PROFILE,
+            "REC",
+            FakeMute(),
+            key_buttons=("F2", "F3"),
+            on_key=self.keys.append,
+            repeat_buttons=("F2",),
+            repeat_delay=0.5,
+            repeat_interval=0.04,
+            clock=lambda: self.now,
+        )
+
+    def advance(self, seconds, step=0.01):
+        end = self.now + seconds
+        while self.now < end - 1e-9:
+            self.now += step
+            self.ptt.poll()
+
+    def test_repeats_after_the_delay_while_held(self):
+        self.ptt.handle_report(F2)
+        self.advance(0.49)
+        self.assertEqual(self.keys, ["F2"])
+        self.advance(0.51)  # one second in total: 1 + about 13 repeats
+        self.assertGreaterEqual(len(self.keys), 12)
+        self.assertLessEqual(len(self.keys), 15)
+
+    def test_release_stops_the_repeat(self):
+        self.ptt.handle_report(F2)
+        self.advance(0.7)
+        self.ptt.handle_report(IDLE)
+        count = len(self.keys)
+        self.advance(1.0)
+        self.assertEqual(len(self.keys), count)
+
+    def test_duplicate_reports_do_not_restart_the_delay(self):
+        self.ptt.handle_report(F2)
+        self.advance(0.3)
+        self.ptt.handle_report(F2)
+        self.advance(0.25)
+        self.assertGreater(len(self.keys), 1)
+
+    def test_keys_without_repeat_press_once(self):
+        self.ptt.handle_report(F3)
+        self.advance(2)
+        self.assertEqual(self.keys, ["F3"])
+
+    def test_timeout_follows_the_repeat(self):
+        self.assertEqual(self.ptt.next_timeout(), daemon.MUTE_CHECK_SECONDS)
+        self.ptt.handle_report(F2)
+        self.assertAlmostEqual(self.ptt.next_timeout(), 0.5)
+
+
 class ButtonMappingTest(QuietTestCase):
     def test_no_talk_button_never_opens(self):
         fake = FakeMute()
@@ -724,6 +784,10 @@ class RunTest(QuietTestCase):
     def test_clears_the_status_on_exit(self):
         self.run_with(KeyboardInterrupt)
         self.status.clear.assert_called_once()
+
+    def test_frequent_timeouts_do_not_check_the_mute_state_each_time(self):
+        self.run_with(None, None, None, None, KeyboardInterrupt)
+        self.assertEqual(self.get_mute.call_count, 1)
 
     def test_idle_timeout_checks_the_mute_state(self):
         self.get_mute.return_value = False

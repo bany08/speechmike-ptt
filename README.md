@@ -98,7 +98,7 @@ button can get one function:
 [buttons]
 rec = dictate
 f1 = talk
-f2 = key BackSpace
+f2 = repeat BackSpace
 f3 = send
 ```
 
@@ -108,13 +108,17 @@ f3 = send
 | `dictate` | Drives a speech-to-text tool, see [Dictation](#dictation). The text goes into any text field. |
 | `send` | Presses Enter. Set `send_command` in `[speechmike-ptt]` to change the key. |
 | `key <name>` | Presses a key, by its xdotool name: `BackSpace`, `Escape`, `ctrl+z` and so on. |
+| `repeat <name>` | Like `key`, but repeats while the button is held, like a keyboard. |
 | `none` | Does nothing. |
 
 Only one button can `talk` and one can `dictate`. Button names are the ones from the device table:
 `rec`, `play`, `fwd`, `rew`, `eol_prio`, `ins_ovr`, `f1`, `f2`, `f3`. With `[buttons]`, do not set
 `button` in the other sections.
 
-`send` and `key` use `xdotool` and need X11. The service takes the display from the systemd user
+A repeating key starts after `repeat_delay_ms` (default 500) and then repeats every
+`repeat_interval_ms` (default 40). Both can be set in `[speechmike-ptt]`.
+
+`send`, `key` and `repeat` use `xdotool` and need X11. The service takes the display from the systemd user
 manager, because it often starts before the desktop is up.
 
 `talk` does not control an app. The voice mode of the Claude desktop app, for example, only listens

@@ -160,6 +160,20 @@ class LoadConfigTest(unittest.TestCase):
             },
         )
 
+    def test_repeat_function(self):
+        config = self.load("[buttons]\nf2 = repeat BackSpace\nf3 = send\n")
+        self.assertEqual(config.repeat_buttons, ("F2",))
+        self.assertEqual(dict(config.key_buttons)["F2"][-1], "BackSpace")
+        self.assertEqual((config.repeat_delay_ms, config.repeat_interval_ms), (500, 40))
+
+    def test_repeat_timing(self):
+        config = self.load("[speechmike-ptt]\nrepeat_delay_ms = 300\nrepeat_interval_ms = 25\n")
+        self.assertEqual((config.repeat_delay_ms, config.repeat_interval_ms), (300, 25))
+        with self.assertRaisesRegex(ConfigError, "at least 10"):
+            self.load("[speechmike-ptt]\nrepeat_interval_ms = 1\n")
+        with self.assertRaisesRegex(ConfigError, "must be a number"):
+            self.load("[speechmike-ptt]\nrepeat_delay_ms = soon\n")
+
     def test_invalid_key_name(self):
         for value in ("key", "key a;b", "key a b"):
             with self.assertRaises(ConfigError):

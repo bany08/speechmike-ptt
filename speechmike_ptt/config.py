@@ -7,13 +7,21 @@ leave the user in a mode they did not choose.
 from __future__ import annotations
 
 import configparser
+import logging
 import os
+import re
 import shlex
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, replace
+from typing import Dict, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 SECTION = "speechmike-ptt"
 DICTATION_SECTION = "dictation"
+BUTTONS_SECTION = "buttons"
+FUNCTIONS = ("talk", "dictate", "send", "key <name>", "none")
+DEFAULT_SEND_COMMAND = ("xdotool", "key", "--clearmodifiers", "Return")
+KEY_NAME = re.compile(r"^[A-Za-z0-9_+]+$")  # an xdotool key name such as BackSpace or ctrl+z
 MODES = ("hold", "toggle")
 DEFAULT_RELEASE_DELAY_MS = 400
 
@@ -24,7 +32,7 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class DictationConfig:
-    button: str
+    button: Optional[str]
     on_press: Tuple[str, ...]  # command, already split into arguments
     on_release: Tuple[str, ...]
     release_delay_ms: int = DEFAULT_RELEASE_DELAY_MS
@@ -36,10 +44,12 @@ class DictationConfig:
 @dataclass(frozen=True)
 class Config:
     mode: str = "hold"
-    button: str = "REC"
+    button: Optional[str] = "REC"  # the talk button, None if no button talks
     source: Optional[str] = None  # overrides the automatic source detection
     notify: bool = False  # desktop notification on every switch
     dictation: Optional[DictationConfig] = None
+    key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()  # button and the command it runs
+    send_command: Tuple[str, ...] = DEFAULT_SEND_COMMAND
 
 
 def config_path() -> str:
@@ -50,14 +60,38 @@ def config_path() -> str:
 def _command(path: str, values: dict, key: str) -> Tuple[str, ...]:
     text = values.get(key)
     if not text:
-        raise ConfigError(f"{path}: [{DICTATION_SECTION}] needs {key}")
+        raise ConfigError(f"{path}: missing {key}")
     try:
         command = tuple(shlex.split(text))
     except ValueError as exc:
         raise ConfigError(f"{path}: invalid {key}: {exc}") from exc
     if not command:
-        raise ConfigError(f"{path}: [{DICTATION_SECTION}] needs {key}")
+        raise ConfigError(f"{path}: missing {key}")
     return command
+
+
+def _load_buttons(path: str, parser: configparser.ConfigParser) -> Optional[Dict[str, str]]:
+    if not parser.has_section(BUTTONS_SECTION):
+        return None
+    buttons = {}
+    for name, function in parser[BUTTONS_SECTION].items():
+        words = function.split()
+        if len(words) == 2 and words[0].lower() == "key":
+            if not KEY_NAME.match(words[1]):
+                raise ConfigError(f"{path}: {name} = {function!r}, invalid key name")
+            buttons[name.upper()] = f"key {words[1]}"
+            continue
+        function = function.lower()
+        if function not in FUNCTIONS or function == "key <name>":
+            raise ConfigError(
+                f"{path}: {name} = {function!r}, must be one of {', '.join(FUNCTIONS)}"
+            )
+        buttons[name.upper()] = function
+    for function in ("talk", "dictate"):
+        names = [name for name, value in buttons.items() if value == function]
+        if len(names) > 1:
+            raise ConfigError(f"{path}: only one button can {function}, not {', '.join(names)}")
+    return buttons
 
 
 def _load_dictation(path: str, parser: configparser.ConfigParser) -> Optional[DictationConfig]:
@@ -76,8 +110,8 @@ def _load_dictation(path: str, parser: configparser.ConfigParser) -> Optional[Di
     unknown_keys = set(values) - known
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
-    button = values.get("button", "").upper()
-    if not button:
+    button = values.get("button", "").upper() or None
+    if button is None and not parser.has_section(BUTTONS_SECTION):
         raise ConfigError(f"{path}: [{DICTATION_SECTION}] needs button")
     try:
         delay = int(values.get("release_delay_ms", DEFAULT_RELEASE_DELAY_MS))
@@ -108,17 +142,13 @@ def load_config(path: Optional[str] = None) -> Config:
     except (OSError, UnicodeDecodeError, configparser.Error) as exc:
         raise ConfigError(f"Cannot read {path}: {exc}") from exc
 
-    unknown_sections = set(parser.sections()) - {SECTION, DICTATION_SECTION}
+    unknown_sections = set(parser.sections()) - {SECTION, DICTATION_SECTION, BUTTONS_SECTION}
     if unknown_sections:
         raise ConfigError(f"{path}: unknown section {sorted(unknown_sections)[0]!r}")
     dictation = _load_dictation(path, parser)
-    if not parser.has_section(SECTION):
-        if dictation is not None and dictation.button == Config().button:
-            raise ConfigError(f"{path}: the dictation button must differ from button")
-        return Config(dictation=dictation)
-
-    values = dict(parser[SECTION])
-    unknown_keys = set(values) - {"mode", "button", "source", "notify"}
+    buttons = _load_buttons(path, parser)
+    values = dict(parser[SECTION]) if parser.has_section(SECTION) else {}
+    unknown_keys = set(values) - {"mode", "button", "source", "notify", "send_command"}
     if unknown_keys:
         raise ConfigError(f"{path}: unknown setting {sorted(unknown_keys)[0]!r}")
 
@@ -133,12 +163,66 @@ def load_config(path: Optional[str] = None) -> Config:
         notify = parser.getboolean(SECTION, "notify", fallback=defaults.notify)
     except ValueError as exc:
         raise ConfigError(f"{path}: notify must be true or false") from exc
-    if dictation is not None and dictation.button == button:
-        raise ConfigError(f"{path}: the dictation button must differ from button")
+    send_command = (
+        _command(path, values, "send_command") if values.get("send_command") else DEFAULT_SEND_COMMAND
+    )
+    key_buttons: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    if buttons is None:
+        if dictation is not None and dictation.button == button:
+            raise ConfigError(f"{path}: the dictation button must differ from button")
+    else:
+        if "button" in values:
+            raise ConfigError(f"{path}: set the buttons in [{BUTTONS_SECTION}], not with button")
+        if dictation is not None and dictation.button is not None:
+            raise ConfigError(
+                f"{path}: set the dictation button in [{BUTTONS_SECTION}], not in [{DICTATION_SECTION}]"
+            )
+        talk = [name for name, value in buttons.items() if value == "talk"]
+        dictate = [name for name, value in buttons.items() if value == "dictate"]
+        if dictate and dictation is None:
+            raise ConfigError(f"{path}: {dictate[0]} = dictate needs a [{DICTATION_SECTION}] section")
+        button = talk[0] if talk else None
+        dictation = replace(dictation, button=dictate[0]) if dictate else None
+        keys = []
+        for name, value in buttons.items():
+            if value == "send":
+                keys.append((name, send_command))
+            elif value.startswith("key "):
+                keys.append((name, ("xdotool", "key", "--clearmodifiers", value[4:])))
+        key_buttons = tuple(keys)
     return Config(
         mode=mode,
         button=button,
         source=values.get("source") or None,
         notify=notify,
         dictation=dictation,
+        key_buttons=key_buttons,
+        send_command=send_command,
     )
+
+
+class ConfigWatcher:
+    """Notices changes of the configuration file, so they apply without a restart."""
+
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.path = path or config_path()
+        self.stamp = self._stamp()
+
+    def _stamp(self) -> Optional[Tuple[int, int]]:
+        try:
+            stat = os.stat(self.path)
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def poll(self) -> Optional[Config]:
+        """Return the new configuration if the file changed and is valid."""
+        stamp = self._stamp()
+        if stamp == self.stamp:
+            return None
+        self.stamp = stamp
+        try:
+            return load_config(self.path)
+        except ConfigError as exc:
+            log.error("The changed configuration is invalid and was not applied: %s", exc)
+            return None

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import time
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 from .audio import (
     AudioError,
@@ -18,7 +19,7 @@ from .audio import (
     select_source,
     set_source_mute,
 )
-from .config import Config, ConfigError, DictationConfig
+from .config import Config, ConfigError, ConfigWatcher, DictationConfig
 from .devices import DeviceProfile
 from .hid import DeviceGone, HidInterface, find_hid_interfaces, read_reports, udev_hint
 from .notify import Notifier
@@ -40,6 +41,14 @@ class NotReady(Exception):
     """The device or its audio source is not available yet."""
 
 
+class ConfigChanged(Exception):
+    """The configuration file changed. The session restarts with the new one."""
+
+    def __init__(self, config: Config) -> None:
+        super().__init__("configuration changed")
+        self.config = config
+
+
 def mute(set_mute: SetMute, source_exists: Optional[Callable[[], bool]] = None) -> None:
     """Mute the microphone, retrying because a failure here leaves it open.
 
@@ -59,11 +68,37 @@ def mute(set_mute: SetMute, source_exists: Optional[Callable[[], bool]] = None) 
             time.sleep(MUTE_RETRY_DELAY_SECONDS)
 
 
-def run_action(command: Sequence[str]) -> bool:
+def display_env() -> Optional[Dict[str, str]]:
+    """Return an environment with the desktop display, for commands that type keys.
+
+    The service often starts before the desktop exports DISPLAY, so ask the
+    systemd user manager, which has it once the session is up.
+    """
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return None
+    try:
+        output = subprocess.run(
+            ["systemctl", "--user", "show-environment"],
+            capture_output=True,
+            text=True,
+            timeout=ACTION_TIMEOUT_SECONDS,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = {}
+    for line in output.splitlines():
+        name, _, value = line.partition("=")
+        if name in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY"):
+            found[name] = value
+    return {**os.environ, **found} if found else None
+
+
+def run_action(command: Sequence[str], env: Optional[Dict[str, str]] = None) -> bool:
     """Run a configured command. Returns False if it failed, and never raises."""
     try:
         result = subprocess.run(
             list(command),
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -169,7 +204,7 @@ class PushToTalk:
     def __init__(
         self,
         profile: DeviceProfile,
-        button: str,
+        button: Optional[str],
         set_mute: SetMute,
         mode: str = "hold",
         source_exists: Optional[Callable[[], bool]] = None,
@@ -177,6 +212,8 @@ class PushToTalk:
         is_muted: Optional[Callable[[], bool]] = None,
         dictation: Optional[Dictation] = None,
         on_state: Optional[Callable[[bool, bool], None]] = None,
+        key_buttons: Sequence[str] = (),
+        on_key: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.profile = profile
         self.button = button
@@ -188,13 +225,17 @@ class PushToTalk:
         self.check_failing = False
         self.dictation = dictation
         self.on_state = on_state or (lambda is_open, dictating: None)
+        self.key_buttons = tuple(key_buttons)
+        self.on_key = on_key or (lambda name: None)
+        self.keys_held: set = set()
         self.is_open = False
         self.talking = False
         self.was_held = False
 
     def handle_report(self, report: bytes) -> None:
         pressed, _ = self.profile.decode_buttons(report)
-        held = self.button in pressed
+        self._handle_keys(pressed)
+        held = self.button is not None and self.button in pressed
         if self.mode == "toggle":
             self.talking = self.talking != (held and not self.was_held)
         else:
@@ -211,6 +252,12 @@ class PushToTalk:
         self.dictation.update(dictation_held)
         self._apply()
         self._publish()
+
+    def _handle_keys(self, pressed: Sequence[str]) -> None:
+        held = {name for name in self.key_buttons if name in pressed}
+        for name in sorted(held - self.keys_held):
+            self.on_key(name)
+        self.keys_held = held
 
     def poll(self) -> None:
         """Handle timers. Call this after every report and timeout."""
@@ -292,7 +339,7 @@ def find_target(config: Config) -> Tuple[HidInterface, Source]:
         raise NotReady("No supported device found.")
     target = interfaces[0]
 
-    if config.button not in target.profile.buttons:
+    if config.button is not None and config.button not in target.profile.buttons:
         known = ", ".join(target.profile.buttons)
         raise ConfigError(f"Unknown button {config.button} for {target.profile.name}. Known: {known}")
     if config.dictation and config.dictation.button not in target.profile.buttons:
@@ -300,6 +347,10 @@ def find_target(config: Config) -> Tuple[HidInterface, Source]:
         raise ConfigError(
             f"Unknown button {config.dictation.button} for {target.profile.name}. Known: {known}"
         )
+    for name, _command in config.key_buttons:
+        if name not in target.profile.buttons:
+            known = ", ".join(target.profile.buttons)
+            raise ConfigError(f"Unknown button {name} for {target.profile.name}. Known: {known}")
 
     try:
         sources = list_sources()
@@ -322,6 +373,7 @@ def run_session(
     config: Config,
     notifier: Optional[Notifier] = None,
     status: Optional[StatusFile] = None,
+    watcher: Optional[ConfigWatcher] = None,
 ) -> None:
     """Serve one connected device until it goes away. Always ends muted."""
 
@@ -338,8 +390,18 @@ def run_session(
     status = status or StatusFile(None)
     status.update(device=True, mic="muted", dictating=False)
     log.info("Using %s and %s", target.node, mask_serial(source.name, target.serial))
-    action = "Hold" if config.mode == "hold" else "Press"
-    log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
+    if config.button is None:
+        log.info("Microphone muted. No button is set to talk.")
+    else:
+        action = "Hold" if config.mode == "hold" else "Press"
+        log.info("Microphone muted. %s %s to talk (%s mode).", action, config.button, config.mode)
+    key_commands = dict(config.key_buttons)
+    for name, command in config.key_buttons:
+        log.info("Press %s for key %s.", name, command[-1])
+
+    def press_key(name: str) -> None:
+        if run_action(key_commands[name], display_env()):
+            log.info("Key %s sent", key_commands[name][-1])
 
     dictation = None
     if config.dictation is not None:
@@ -362,11 +424,16 @@ def run_session(
             dictating=dictating,
             failed_starts=dictation.failed_starts if dictation else 0,
         ),
+        tuple(key_commands),
+        press_key,
     )
     try:
         for report in read_reports(target.node, ptt.next_timeout):
             if report is None:
                 ptt.enforce_mute()
+                changed = watcher.poll() if watcher else None
+                if changed is not None:
+                    raise ConfigChanged(changed)
             else:
                 ptt.handle_report(report)
             ptt.poll()
@@ -392,8 +459,11 @@ def wait_for_device() -> None:
     time.sleep(DEVICE_POLL_SECONDS)
 
 
-def run(config: Config = Config()) -> int:
-    """Serve the device across reconnects until interrupted. Returns the exit code."""
+def run(config: Config = Config(), watcher: Optional[ConfigWatcher] = None) -> int:
+    """Serve the device across reconnects until interrupted. Returns the exit code.
+
+    With a watcher, a changed configuration file applies without a restart.
+    """
     last_message = None
     notifier = Notifier() if config.notify else None
     status = StatusFile()
@@ -409,7 +479,12 @@ def run(config: Config = Config()) -> int:
         while True:
             try:
                 target, source = find_target(config)
-                run_session(target, source, config, notifier, status)
+                run_session(target, source, config, notifier, status, watcher)
+            except ConfigChanged as change:
+                config = change.config
+                log.info("Configuration reloaded.")
+                last_message = None
+                continue
             except NotReady as exc:
                 status.update(device=False, mic="muted", dictating=False)
                 report_once(f"{exc} Waiting.")
@@ -420,6 +495,11 @@ def run(config: Config = Config()) -> int:
                 status.update(device=False, mic="muted", dictating=False)
                 log.info("Device disconnected. Waiting.")
                 last_message = None
+            if watcher is not None:
+                changed = watcher.poll()
+                if changed is not None:
+                    config = changed
+                    log.info("Configuration reloaded.")
             wait_for_device()
     except KeyboardInterrupt:
         log.info("Exiting.")

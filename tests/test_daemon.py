@@ -386,6 +386,68 @@ class RunActionTest(QuietTestCase):
         self.assertFalse(daemon.run_action(("slow",)))
 
 
+F3 = bytes.fromhex("80000000842a000800")
+F3_AND_REC = bytes.fromhex("80000000842a000801")
+
+
+class SendTest(QuietTestCase):
+    def setUp(self):
+        super().setUp()
+        self.sent = []
+        self.fake = FakeMute()
+        self.ptt = PushToTalk(PROFILE, "REC", self.fake, key_buttons=("F3",), on_key=self.sent.append)
+
+    def test_sends_once_per_press(self):
+        for report in (F3, F3, IDLE, IDLE, F3):
+            self.ptt.handle_report(report)
+        self.assertEqual(self.sent, ["F3", "F3"])
+
+    def test_send_does_not_open_the_microphone(self):
+        self.ptt.handle_report(F3)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_send_while_talking_keeps_the_microphone_open(self):
+        for report in (REC, F3_AND_REC):
+            self.ptt.handle_report(report)
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(self.ptt.is_open)
+
+
+class ButtonMappingTest(QuietTestCase):
+    def test_no_talk_button_never_opens(self):
+        fake = FakeMute()
+        ptt = PushToTalk(PROFILE, None, fake)
+        for report in (REC, IDLE, PLAY):
+            ptt.handle_report(report)
+        self.assertEqual(fake.calls, [])
+
+    def test_talk_on_another_button(self):
+        fake = FakeMute()
+        ptt = PushToTalk(PROFILE, "F1", fake)
+        ptt.handle_report(REC)
+        self.assertEqual(fake.calls, [])
+        ptt.handle_report(F1)
+        self.assertEqual(fake.calls, [False])
+
+
+class DisplayEnvTest(unittest.TestCase):
+    @mock.patch.dict("os.environ", {"DISPLAY": ":1"})
+    def test_existing_display_is_kept(self):
+        self.assertIsNone(daemon.display_env())
+
+    @mock.patch("speechmike_ptt.daemon.subprocess.run")
+    def test_display_from_the_user_manager(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "DISPLAY=:0\nXAUTHORITY=/x\nHOME=/h\n")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            env = daemon.display_env()
+        self.assertEqual((env["DISPLAY"], env["XAUTHORITY"]), (":0", "/x"))
+
+    @mock.patch("speechmike_ptt.daemon.subprocess.run", side_effect=OSError)
+    def test_no_user_manager(self, _run):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(daemon.display_env())
+
+
 class ToggleTest(QuietTestCase):
     def setUp(self):
         super().setUp()
@@ -614,6 +676,27 @@ class RunTest(QuietTestCase):
             self.read.return_value = reports(F1, KeyboardInterrupt)
             self.assertEqual(daemon.run(config), 0)
         self.assertEqual(order, [True, False, "start", "stop", True])
+
+    def test_changed_config_applies_without_restart(self):
+        watcher = mock.Mock()
+        watcher.poll.side_effect = [Config(button="F1"), None]
+        self.wait.side_effect = KeyboardInterrupt
+        self.read.side_effect = [reports(None), reports(F1, KeyboardInterrupt)]
+        self.assertEqual(daemon.run(Config(), watcher), 0)
+        self.assertEqual(self.read.call_count, 2)
+        self.assertIn(False, self.mute_calls)  # F1 talks after the reload
+
+    def test_send_button_runs_the_send_command(self):
+        config = Config(key_buttons=(("F3", ("xdotool", "key", "Return")),))
+        with mock.patch("speechmike_ptt.daemon.run_action", return_value=True) as action, mock.patch(
+            "speechmike_ptt.daemon.display_env", return_value=None
+        ):
+            self.read.return_value = reports(F3, KeyboardInterrupt)
+            daemon.run(config)
+        self.assertEqual(action.call_args.args[0][-1], "Return")
+
+    def test_unknown_send_button(self):
+        self.assertEqual(daemon.run(Config(key_buttons=(("NOPE", ("x",)),))), 1)
 
     def test_unknown_dictation_button(self):
         config = Config(dictation=DictationConfig("NOPE", ("a",), ("b",)))

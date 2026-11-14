@@ -6,6 +6,7 @@ from unittest import mock
 from speechmike_ptt.config import (
     Config,
     ConfigError,
+    ConfigWatcher,
     DictationConfig,
     config_path,
     load_config,
@@ -86,7 +87,7 @@ class LoadConfigTest(unittest.TestCase):
 
     def test_dictation_needs_its_settings(self):
         for missing in ("button = F1\non_press = a\n", "on_press = a\non_release = b\n"):
-            with self.assertRaisesRegex(ConfigError, "needs"):
+            with self.assertRaisesRegex(ConfigError, "needs|missing"):
                 self.load("[dictation]\n" + missing)
 
     def test_dictation_button_must_differ(self):
@@ -111,6 +112,68 @@ class LoadConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "unknown setting"):
             self.load(self.DICTATION + "delay = 1\n")
 
+    DICTATION_COMMANDS = "[dictation]\non_press = a\non_release = b\n"
+
+    def test_buttons_swap_talk_and_dictate(self):
+        config = self.load("[buttons]\nrec = dictate\nf1 = talk\nf3 = send\n" + self.DICTATION_COMMANDS)
+        self.assertEqual(config.button, "F1")
+        self.assertEqual(config.dictation.button, "REC")
+        self.assertEqual(config.key_buttons, (("F3", ("xdotool", "key", "--clearmodifiers", "Return")),))
+
+    def test_without_buttons_the_old_settings_apply(self):
+        config = self.load(self.DICTATION)
+        self.assertEqual((config.button, config.dictation.button, config.key_buttons), ("REC", "F1", ()))
+
+    def test_no_talk_button(self):
+        config = self.load("[buttons]\nf1 = dictate\nrec = none\n" + self.DICTATION_COMMANDS)
+        self.assertIsNone(config.button)
+
+    def test_buttons_without_dictate_disable_dictation(self):
+        config = self.load("[buttons]\nrec = talk\n" + self.DICTATION_COMMANDS)
+        self.assertIsNone(config.dictation)
+
+    def test_unknown_function(self):
+        with self.assertRaisesRegex(ConfigError, "must be one of"):
+            self.load("[buttons]\nrec = shout\n")
+
+    def test_only_one_talk_button(self):
+        with self.assertRaisesRegex(ConfigError, "only one button can talk"):
+            self.load("[buttons]\nrec = talk\nf1 = talk\n")
+
+    def test_dictate_needs_commands(self):
+        with self.assertRaisesRegex(ConfigError, "needs a \\[dictation\\] section"):
+            self.load("[buttons]\nf1 = dictate\n")
+
+    def test_old_and_new_button_settings_conflict(self):
+        with self.assertRaisesRegex(ConfigError, "not with button"):
+            self.load("[speechmike-ptt]\nbutton = REC\n[buttons]\nrec = talk\n")
+        with self.assertRaisesRegex(ConfigError, "not in \\[dictation\\]"):
+            self.load("[buttons]\nrec = dictate\n" + self.DICTATION)
+
+    def test_key_function(self):
+        config = self.load("[buttons]\nf1 = key BackSpace\nf2 = key ctrl+z\n")
+        self.assertEqual(
+            dict(config.key_buttons),
+            {
+                "F1": ("xdotool", "key", "--clearmodifiers", "BackSpace"),
+                "F2": ("xdotool", "key", "--clearmodifiers", "ctrl+z"),
+            },
+        )
+
+    def test_invalid_key_name(self):
+        for value in ("key", "key a;b", "key a b"):
+            with self.assertRaises(ConfigError):
+                self.load(f"[buttons]\nf1 = {value}\n")
+
+    def test_send_uses_the_send_command(self):
+        config = self.load("[speechmike-ptt]\nsend_command = xdotool key ctrl+Return\n[buttons]\nf3 = send\n")
+        self.assertEqual(config.key_buttons, (("F3", ("xdotool", "key", "ctrl+Return")),))
+
+    def test_send_command(self):
+        config = self.load("[speechmike-ptt]\nsend_command = xdotool key ctrl+Return\n")
+        self.assertEqual(config.send_command, ("xdotool", "key", "ctrl+Return"))
+        self.assertEqual(self.load("").send_command[-1], "Return")
+
     def test_invalid_mode(self):
         with self.assertRaisesRegex(ConfigError, "mode must be"):
             self.load("[speechmike-ptt]\nmode = always\n")
@@ -130,6 +193,41 @@ class LoadConfigTest(unittest.TestCase):
     def test_syntax_error(self):
         with self.assertRaisesRegex(ConfigError, "Cannot read"):
             self.load("mode = toggle\n")
+
+
+class ConfigWatcherTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "config.ini")
+
+    def write(self, text):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.utime(self.path, ns=(0, os.stat(self.path).st_mtime_ns + 10**9))
+
+    def test_unchanged_file(self):
+        self.write("[speechmike-ptt]\n")
+        self.assertIsNone(ConfigWatcher(self.path).poll())
+
+    def test_changed_file_is_loaded(self):
+        self.write("[speechmike-ptt]\n")
+        watcher = ConfigWatcher(self.path)
+        self.write("[speechmike-ptt]\nmode = toggle\n")
+        self.assertEqual(watcher.poll().mode, "toggle")
+        self.assertIsNone(watcher.poll())
+
+    def test_invalid_change_is_ignored(self):
+        self.write("[speechmike-ptt]\n")
+        watcher = ConfigWatcher(self.path)
+        self.write("[speechmike-ptt]\nmode = shout\n")
+        with self.assertLogs("speechmike_ptt.config", "ERROR"):
+            self.assertIsNone(watcher.poll())
+
+    def test_created_file_is_noticed(self):
+        watcher = ConfigWatcher(self.path)
+        self.write("[speechmike-ptt]\nmode = toggle\n")
+        self.assertEqual(watcher.poll().mode, "toggle")
 
 
 class ConfigPathTest(unittest.TestCase):

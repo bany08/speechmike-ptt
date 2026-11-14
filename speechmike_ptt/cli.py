@@ -11,7 +11,7 @@ from typing import List, Optional, Sequence
 
 from . import __version__, daemon
 from .audio import AudioError, list_sources, mask_serial, select_source
-from .config import ConfigError, load_config
+from .config import ConfigError, ConfigWatcher, load_config
 from .devices import DEVICES, DeviceProfile
 from .hid import (
     DeviceGone,
@@ -120,6 +120,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--debug",
+        "--learn",
         action="store_true",
         help="show detected devices and print button reports (read-only)",
     )
@@ -146,7 +147,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.debug:
             return run_debug()
-        return daemon.run(load_config())
+        return daemon.run(load_config(), ConfigWatcher())
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 1

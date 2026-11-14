@@ -40,6 +40,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 7. systemd user service, udev rule file, `install.sh` with uninstall (done)
 8. Final README, test on a clean system
 9. Dictation with a second button (done)
+10. Button mapping in `[buttons]` (talk, dictate, send, key, none), config reload (done)
 
 Out of scope for now: LED control (output report format unknown; goes into the README roadmap),
 testing on plain PulseAudio.

@@ -86,7 +86,40 @@ notify = false
 ```
 
 In toggle mode the microphone stays open until the next press, so it listens until you close it.
-An invalid setting stops the program with an error message.
+An invalid setting stops the program with an error message. Changes apply within 2 seconds,
+without a restart. A changed file with an error is not applied, the log says why.
+
+## Buttons
+
+Without a `[buttons]` section, REC talks and the `[dictation]` button dictates. With it, every
+button can get one function:
+
+```ini
+[buttons]
+rec = dictate
+f1 = talk
+f2 = key BackSpace
+f3 = send
+```
+
+| Function | What it does |
+| --- | --- |
+| `talk` | Opens the microphone while the button is held. Only apps that listen by themselves hear you. |
+| `dictate` | Drives a speech-to-text tool, see [Dictation](#dictation). The text goes into any text field. |
+| `send` | Presses Enter. Set `send_command` in `[speechmike-ptt]` to change the key. |
+| `key <name>` | Presses a key, by its xdotool name: `BackSpace`, `Escape`, `ctrl+z` and so on. |
+| `none` | Does nothing. |
+
+Only one button can `talk` and one can `dictate`. Button names are the ones from the device table:
+`rec`, `play`, `fwd`, `rew`, `eol_prio`, `ins_ovr`, `f1`, `f2`, `f3`. With `[buttons]`, do not set
+`button` in the other sections.
+
+`send` and `key` use `xdotool` and need X11. The service takes the display from the systemd user
+manager, because it often starts before the desktop is up.
+
+`talk` does not control an app. The voice mode of the Claude desktop app, for example, only listens
+after you click its microphone button. To talk to an app like that, use `dictate` into its text
+field and `send`.
 
 ## Dictation
 
@@ -95,7 +128,6 @@ which types into the focused window. REC stays pure push-to-talk.
 
 ```ini
 [dictation]
-button = F1
 on_press = pkill -USR2 -x handy
 on_release = pkill -USR2 -x handy
 # Keeps the microphone open and recording this long after the button is released,
@@ -105,7 +137,8 @@ release_delay_ms = 400
 recorder = cpal-pulseaudio
 ```
 
-While the button is held the microphone is open and the tool records. After the release and the
+The button is set in `[buttons]` with `dictate`. Older configurations can set `button = F1` here
+instead. While the button is held the microphone is open and the tool records. After the release and the
 delay, the program stops the tool and mutes the microphone.
 
 `on_press` and `on_release` are commands, not shell lines. Tools like Handy only have a toggle, so a
@@ -120,6 +153,9 @@ Notes for Handy:
 - Select the SpeechMike as input device, and set a paste method. Direct typing mixed up the letters
   in our tests, `Ctrl+Shift+V` worked in a terminal.
 - Lower the input volume of the SpeechMike if the recordings are clipped.
+- Leave Handy's "auto submit" off. It presses Enter after every dictation. Use a `send` button
+  instead, then you decide when to send.
+- Handy shows its own tray icon next to ours. That is expected.
 - Start Handy inside your desktop session, for example with an autostart entry for
   `handy --start-hidden`, because it needs the display to paste text.
 - Handy keeps recordings and a history of the text on disk. Check its settings before you dictate
@@ -159,6 +195,14 @@ Serial numbers are masked, so the output is safe to paste into an issue.
 
 If the device is not readable, the udev rule from `packaging/70-speechmike.rules` is missing.
 `./install.sh` adds it.
+
+## Known quirks
+
+- The SpeechMike sends every HID report twice. The program only reacts to changes of the button
+  state, so duplicates have no effect.
+- The dictation buttons produce no keyboard or input events, only raw HID reports. Other programs
+  cannot use them without a tool like this one.
+- Some applications adjust the input volume on their own while they record.
 
 ## Adding a device
 

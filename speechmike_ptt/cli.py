@@ -129,8 +129,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="show a status icon (needs PyGObject and AyatanaAppIndicator3)",
     )
+    parser.add_argument(
+        "--assign",
+        nargs="+",
+        metavar=("BUTTON", "FUNCTION"),
+        help="set the function of a button in the config file, for example: --assign f2 repeat BackSpace",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
+
+    if args.assign:
+        from .assign import assign
+
+        if len(args.assign) < 2:
+            parser.error("--assign needs a button and a function")
+        try:
+            mapping = assign(args.assign[0], " ".join(args.assign[1:]))
+        except ConfigError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        for name, function in mapping.items():
+            if function != "none":
+                print(f"{name.lower()} = {function}")
+        return 0
 
     if args.tray:
         from . import tray

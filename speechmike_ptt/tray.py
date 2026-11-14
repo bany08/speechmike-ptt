@@ -14,6 +14,7 @@ import subprocess
 import sys
 from typing import Optional, Sequence, Tuple
 
+from . import assign as assignment
 from .config import ConfigError, DictationConfig, load_config
 from .status import read_status
 
@@ -139,6 +140,53 @@ def main() -> int:
         menu.append(start_item)
 
     menu.append(Gtk.SeparatorMenuItem())
+    buttons_item = Gtk.MenuItem(label="Buttons")
+    buttons_menu = Gtk.Menu()
+    buttons_item.set_submenu(buttons_menu)
+    menu.append(buttons_item)
+    button_items = {}  # button -> (menu item, {function: radio item})
+    syncing = False
+
+    def choose(radio, button: str, function: str) -> None:
+        if syncing or not radio.get_active():
+            return
+        try:
+            assignment.assign(button, function)
+        except ConfigError as exc:
+            notify(f"Button not changed: {exc}")
+        sync_buttons()
+
+    for button in assignment.button_names():
+        item = Gtk.MenuItem(label=button)
+        submenu = Gtk.Menu()
+        radios = {}
+        group = None
+        for label, function in assignment.PRESETS:
+            radio = Gtk.RadioMenuItem.new_with_label_from_widget(group, label)
+            group = radio
+            radio.connect("toggled", choose, button, function)
+            submenu.append(radio)
+            radios[function] = radio
+        item.set_submenu(submenu)
+        buttons_menu.append(item)
+        button_items[button] = (item, radios)
+
+    def sync_buttons() -> None:
+        nonlocal syncing
+        try:
+            mapping = assignment.current_mapping()
+        except ConfigError:
+            return
+        syncing = True
+        try:
+            for button, (item, radios) in button_items.items():
+                function = mapping.get(button, "none")
+                item.set_label(f"{button}: {assignment.label_for(function)}")
+                for value, radio in radios.items():
+                    radio.set_active(value == function)
+        finally:
+            syncing = False
+
     command = log_command()
     if command is not None:
         log_item = Gtk.MenuItem(label="Show log")
@@ -172,6 +220,8 @@ def main() -> int:
             indicator.set_icon_full(icon, label)
             last_icon = icon
         status_item.set_label(label)
+        if polls % TOOL_CHECK_EVERY_POLLS == 0:
+            sync_buttons()
         if tool is not None and polls % TOOL_CHECK_EVERY_POLLS == 0:
             running = tool_running(tool.tool_process)
             state = "running" if running else "NOT running"

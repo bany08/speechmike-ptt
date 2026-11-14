@@ -124,6 +124,16 @@ With `double`, the first press never waits for a second one, so it reacts at onc
 within `double_click_ms` (default 400) sends the second key instead. For `double End Home` that
 means the cursor goes to the end of the line and then to its start.
 
+To change a button without an editor, use the status icon menu (Buttons) or the command line:
+
+```sh
+python3 -m speechmike_ptt --assign f2 repeat BackSpace
+```
+
+Both change only that line of the config file and keep your comments. Only one button can talk or
+dictate, so giving that function to another button sets the old one to `none`. If the result would
+be invalid, the file stays as it is.
+
 `send`, `key`, `repeat` and `double` use `xdotool` and need X11. The service takes the display from the systemd user
 manager, because it often starts before the desktop is up.
 

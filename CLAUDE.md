@@ -27,6 +27,7 @@ Linux push-to-talk daemon for the Philips SpeechMike. Public open-source project
 - `speechmike_ptt/notify.py`: optional notifications. Must never block or break the switching.
 - `speechmike_ptt/status.py`: state file in `$XDG_RUNTIME_DIR`, written by the daemon for the icon.
 - `speechmike_ptt/tray.py`: optional status icon, `--tray`. Imports `gi` only on demand.
+- `speechmike_ptt/assign.py`: changes `[buttons]` line by line (keeps comments), used by `--assign` and the icon menu.
 - `speechmike_ptt/cli.py`: argument parsing and the `--debug` mode.
 - `packaging/`: udev rule and systemd user unit, installed by `install.sh`.
 

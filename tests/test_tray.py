@@ -5,6 +5,7 @@ from unittest import mock
 from speechmike_ptt.config import DictationConfig
 from speechmike_ptt.tray import (
     ICON_DIR,
+    wait_until,
     describe,
     dictation_failed,
     handle_failed_dictation,
@@ -30,6 +31,24 @@ class DescribeTest(unittest.TestCase):
         for name in ("off", "muted", "open", "dictating"):
             path = os.path.join(ICON_DIR, f"speechmike-ptt-{name}.svg")
             self.assertTrue(os.path.exists(path), path)
+
+
+class WaitUntilTest(unittest.TestCase):
+    def test_returns_as_soon_as_ready(self):
+        answers = iter([False, False, True])
+        sleeps = []
+        self.assertTrue(wait_until(lambda: next(answers), 30, 0.5, sleeps.append))
+        self.assertEqual(len(sleeps), 2)
+
+    def test_gives_up_after_the_timeout(self):
+        sleeps = []
+        self.assertFalse(wait_until(lambda: False, 2, 0.5, sleeps.append))
+        self.assertEqual(sum(sleeps), 2)
+
+    def test_ready_at_once_does_not_sleep(self):
+        sleeps = []
+        self.assertTrue(wait_until(lambda: True, 30, 0.5, sleeps.append))
+        self.assertEqual(sleeps, [])
 
 
 class FailureTest(unittest.TestCase):

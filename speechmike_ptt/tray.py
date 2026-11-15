@@ -12,7 +12,8 @@ import shutil
 import signal
 import subprocess
 import sys
-from typing import Optional, Sequence, Tuple
+import time
+from typing import Callable, Optional, Sequence, Tuple
 
 from . import assign as assignment
 from .config import ConfigError, DictationConfig, load_config
@@ -21,8 +22,29 @@ from .status import read_status
 log = logging.getLogger(__name__)
 
 POLL_MILLISECONDS = 300
+# At login the icon can start before the desktop's icon host. AppIndicator then
+# falls back to a legacy tray icon and later adds a second one, so wait for it.
+HOST_NAME = "org.kde.StatusNotifierWatcher"
+HOST_WAIT_SECONDS = 30
+HOST_POLL_SECONDS = 0.5
 TOOL_CHECK_EVERY_POLLS = 7  # about every 2 seconds
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+
+
+def wait_until(
+    ready: Callable[[], bool],
+    timeout: float,
+    interval: float,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Wait until ready() is true. Returns False if the timeout passed first."""
+    waited = 0.0
+    while not ready():
+        if waited >= timeout:
+            return False
+        sleep(interval)
+        waited += interval
+    return True
 
 
 def describe(status: Optional[dict]) -> Tuple[str, str]:
@@ -115,6 +137,30 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+    from gi.repository import Gio
+
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def host_ready() -> bool:
+        try:
+            reply = bus.call_sync(
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "NameHasOwner",
+                GLib.Variant("(s)", (HOST_NAME,)),
+                GLib.VariantType("(b)"),
+                Gio.DBusCallFlags.NONE,
+                -1,
+                None,
+            )
+        except GLib.Error:
+            return False
+        return bool(reply.unpack()[0])
+
+    if not wait_until(host_ready, HOST_WAIT_SECONDS, HOST_POLL_SECONDS):
+        log.warning("No status icon host found, using the legacy tray.")
     tool = load_tool()
 
     indicator = AppIndicator.Indicator.new(
